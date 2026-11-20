@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Pulsar</title>
+<style>
+:root{--bg:#0b0a18;--tx:#ece8ff;--mut:#9d96c4;--fc:#a9b8ff}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:radial-gradient(80% 60% at 50% 35%,#1d1640,var(--bg));color:var(--tx);font:15px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;touch-action:none;user-select:none;-webkit-user-select:none;overflow:hidden}
+main{max-width:460px;height:100%;margin:0 auto;padding:18px 16px;display:flex;flex-direction:column}
+h1{font-size:19px;margin:0}
+p{color:var(--mut);margin:4px 0 0;font-size:14px}
+#hud{display:flex;align-items:center;gap:14px;margin-top:20px}
+#mult{min-width:86px;text-align:center;font:900 44px/1 system-ui,sans-serif;color:#fff;text-shadow:0 0 10px var(--fc),0 0 26px var(--fc)}
+#mult.x1{color:#b9b4e0;text-shadow:none;opacity:.6}
+#info{flex:1}
+#txt{font-weight:800;letter-spacing:.06em;text-transform:uppercase;font-size:13px;min-height:18px}
+#casas{display:flex;gap:4px;margin-top:6px}
+#casas i{flex:1;height:12px;border-radius:4px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);transition:background .15s}
+#casas i.on{background:var(--fc);box-shadow:0 0 10px var(--fc)}
+#degraus{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:16px}
+#degraus div{border-radius:10px;padding:7px 6px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);text-align:center;transition:all .2s}
+#degraus div b{display:block;font-size:18px}
+#degraus div small{display:block;font-size:11px;color:var(--mut);line-height:1.25}
+#degraus div.on{background:color-mix(in srgb,var(--c) 22%,transparent);border-color:var(--c);box-shadow:0 0 14px color-mix(in srgb,var(--c) 45%,transparent)}
+#degraus div.on b{color:var(--c)}
+#area{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:12px}
+#combo{font:900 60px/1 system-ui,sans-serif;opacity:.9}
+#combo small{display:block;text-align:center;font-size:13px;font-weight:700;color:var(--mut);letter-spacing:.1em}
+#toca{font-size:13px;color:var(--mut);min-height:18px;text-align:center}
+#toca b{color:var(--fc)}
+canvas{width:100%;height:auto;aspect-ratio:440/70}
+#placar{text-align:center;color:var(--mut);font-size:13px;min-height:18px}
+.bts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:6px}
+button{font:inherit;font-weight:700;background:#2a2450;color:var(--tx);border:0;border-radius:99px;padding:9px 16px;cursor:pointer}
+button.g{background:#ffc861;color:#241a00}
+</style>
+</head>
+<body>
+<main>
+<h1>Pulsar</h1>
+<p>Como no Guitar Hero: você toca a melodia (o tema lento da Pulsar, de notas longas). Toque (ou aperte qualquer tecla) quando os traços encostarem na barra do meio; o rastro mostra quanto a nota dura. No ×1 só os acordes de fundo te acompanham; a cada multiplicador a banda ganha uma parte, e no ×4 a música está completa.</p>
+<div id="degraus"></div>
+<div id="hud"><div id="mult" class="x1">×1</div><div id="info"><div id="txt">toque em começar</div><div id="casas"><i></i><i></i><i></i></div></div></div>
+<div id="area">
+  <div id="combo">0<small>COMBO</small></div>
+  <div id="toca"></div>
+  <canvas id="bar" width="440" height="70"></canvas>
+  <div id="placar"></div>
+</div>
+<div class="bts"><button class="g" id="vai">▶ Começar</button><button id="cal">Calibrar</button></div>
+</main>
+<script type="module">
+// Pulsar: jogo de ritmo em que você toca a melodia. A música é a trilha Pulsar (musica/pulsar.js), tocada na hora pelo
+// motor musica/eletronica.js (veio do protótipo ritmo2.html do 2048 Astros, repositório um-passo), com as camadas ligadas e desligadas ao vivo (opc.mudo). A melodia dela NÃO toca
+// sozinho: cada toque na nota é uma nota da melodia, com a altura, a duração e o timbre da Pulsar. Perdeu a nota: ela
+// falta na música. O tema é o "Órbita lenta" (TEMAS[1] de musica/pulsar.js: poucas notas, longas, 2 ou 3 por
+// compasso), em roda de 8 compassos. (Já foi o arpejo, frenético demais, e o baixo, difícil de ouvir.) A banda entra
+// aos poucos, presa ao multiplicador, e para no ×4:
+//   ×1  acordes de fundo (discretos)   ×2  + bateria   ×3  + baixo   ×4  + arpejo
+// Na barra, os traços vêm das pontas até uma barra fixa no meio, do mesmo formato: a hora é quando encostam nela.
+// Regras: 3 acertos por multiplicador; fora da nota ou nota perdida volta ao ×1.
+// Calibração gravada em localStorage.pulsar_atraso (na primeira vez, aproveita a ptui_ritmo_atraso do 2048 Astros, mesmo domínio).
+import * as PUL from './musica/pulsar.js';
+import { sorteio } from './musica/eletronica.js';
+const JANELA=.2, VER=1.7, MIN=[0,3,6,9];   // janela larga (±0,2 s), para testar com folga; a nota mais perto do toque é a que conta
+const COR=['#a9b8ff','#4fe3ff','#5dffa2','#ffd84a'];
+const BANDA=['acordes','+ bateria','+ baixo','+ arpejo'];
+const mtof=m=>440*Math.pow(2,(m-69)/12);
+let atraso=.03; try{ const a=localStorage.pulsar_atraso??localStorage.ptui_ritmo_atraso; if(a!=null) atraso=+a; }catch(e){}
+const $=s=>document.querySelector(s);
+let ac=null, dest=null, eco=null, rodando=false, calib=null, ult=null, P=60/112/4;
+let passos=new Map(), notas=[], combo=0, k=0, maior=0, acertos=0, erros=0, fb=null;
+const mudo={baixo:true, arpejo:true, bateria:true, acordes:false, melodia:true};   // a melodia é de quem joga
+const camadas=()=>{ mudo.bateria=k<1; mudo.baixo=k<2; mudo.arpejo=k<3; dest.gain.setTargetAtTime([1.15,1.3,1.4,1.45][k], ac.currentTime, .3); };
+
+// a roda de compassos: o tema lento "Órbita lenta", 8 compassos
+const rnd=sorteio(7);
+const RODA=PUL.montaParte('A',{tema:PUL.TEMAS[1]},0,rnd);
+
+const barraDe = s => ({...PUL.PADRAO, ...RODA[Math.floor(s/16)%RODA.length]});
+function notaDe(s){
+  const B=barraDe(s), nm=B.mel&&B.mel[s%16]; if(!nm) return null;   // passo sem nota de melodia
+  return {m:nm[0], dur:nm[1], B};
+}
+function monta(){
+  ac=new (window.AudioContext||window.webkitAudioContext)();
+  dest=ac.createGain(); dest.gain.value=1.15; dest.connect(ac.destination);
+  eco=ac.createDelay(1); eco.delayTime.value=60/112*.75; const fbk=ac.createGain(), lp=ac.createBiquadFilter(), ret=ac.createGain();
+  fbk.gain.value=.34; lp.type='lowpass'; lp.frequency.value=2400; ret.gain.value=.45; eco.connect(lp); lp.connect(fbk); fbk.connect(eco); lp.connect(ret); ret.connect(dest);
+}
+// uma nota da melodia, como o motor toca (eletronica.js), um pouco mais alta: é o instrumento de quem joga
+function notaMel(T,B,m,dur){
+  const o=ac.createOscillator(), fl=ac.createBiquadFilter(), g=ac.createGain(), d=dur*P*.9, v=(B.melV||.04)*1.3;
+  o.type=B.melOnda||'triangle'; o.frequency.value=mtof(m); fl.frequency.value=B.melLp||3600;
+  g.gain.setValueAtTime(0,0); g.gain.setValueAtTime(.0001,T); g.gain.exponentialRampToValueAtTime(v,T+.012); g.gain.exponentialRampToValueAtTime(.0001,T+.012+d);
+  o.connect(fl); fl.connect(g); g.connect(dest); const e=ac.createGain(); e.gain.value=.3; g.connect(e); e.connect(eco); o.start(T); o.stop(T+d+.1);
+}
+
+async function comeca(){
+  if(!ac) monta(); await ac.resume();
+  rodando=true; passos=new Map(); notas=[]; ult=null; combo=0; k=0; acertos=erros=0; camadas();
+  PUL.iniciarMusica(ac,dest,{mudo, compasso:n=>RODA[n%RODA.length], aoPasso:(T,s,B)=>{ ult=[T,s]; passos.set(s,B); if(passos.size>80) passos.delete(passos.keys().next().value); }});
+  pinta(); texto('toque quando os traços encostarem na barra'); $('#vai').textContent='■ Parar';
+}
+function para(){ rodando=false; calib=null; PUL.pararMusica(.6); $('#vai').textContent='▶ Começar'; texto('parado'); pinta(); }
+$('#vai').onclick=()=> rodando ? para() : comeca();
+const lat=()=>ac?(ac.outputLatency||ac.baseLatency||0):0;
+const ouvido=()=>ac.currentTime-lat();
+// as notas: uma em cada tempo (passo múltiplo de 4), previstas pelo último passo agendado (o andamento é fixo)
+function geraNotas(){
+  if(!ult) return; const [T0,s0]=ult, fim=ac.currentTime+VER+.3;
+  for(let s=Math.max(0,s0-8); T0+(s-s0)*P<fim; s++){ if(notas.some(n=>n.s===s) || (calib && s%4)) continue; const nd=notaDe(s); if(nd||calib) notas.push({s, T:T0+(s-s0)*P, ...(nd||{})}); }
+  notas=notas.filter(n=>n.T>ouvido()-2).sort((a,b)=>a.T-b.T);
+}
+function arrasto(){
+  if(!rodando || !ult) return; const agora=ac.currentTime, t=ouvido()-atraso;
+  let m=null, e=9; for(const n of notas) if(!n.ok && !n.perdida && Math.abs(n.T-t)<e){ e=Math.abs(n.T-t); m=n; }
+  if(calib){ if(m){ calib.push(t-m.T); m.ok=true; } fb={t:performance.now()/1000,ok:true}; return fimCalib(); }
+    if(m && e<=JANELA){ m.ok=true; acertos++; combo++; maior=Math.max(maior,combo);
+    if(m.B) notaMel(Math.max(m.T,agora),m.B,m.m,m.dur);   // a nota da melodia, na hora dela (ou já, se o toque veio depois)
+    const k0=k; k=combo>=9?3:combo>=6?2:combo>=3?1:0; if(k!==k0){ camadas(); texto('×'+(k+1)+'! entra '+BANDA[k].replace('+ ','')); } else texto(e<=JANELA*.45?'na nota!':'ok');
+    fb={t:performance.now()/1000,ok:true}; }
+  else { erros++; quebra(m && t<m.T ? 'cedo demais' : 'atrasou'); }
+  pinta();
+}
+function quebra(msg){ if(combo>0){ combo=0; k=0; camadas(); } fb={t:performance.now()/1000,ok:false}; texto(msg); pinta(); }
+function texto(s){ $('#txt').textContent=s; }
+function pinta(){
+  document.body.style.setProperty('--fc',COR[k]);
+  $('#mult').textContent='×'+(k+1); $('#mult').classList.toggle('x1',k===0);
+  const f = k===3 ? 3 : combo-MIN[k]; document.querySelectorAll('#casas i').forEach((c,i)=>c.classList.toggle('on',i<f));
+  $('#combo').firstChild.textContent=combo;
+  document.querySelectorAll('#degraus div').forEach((d,i)=>d.classList.toggle('on',i<=k && rodando));
+  $('#toca').innerHTML = rodando ? (calib ? 'calibrando: toque junto com cada traço' : 'você toca <b>a melodia</b>: cada traço é uma nota') : '';
+  $('#placar').textContent = calib ? `calibrando: ${calib.length} de 10` : acertos+erros ? `${acertos} na nota · ${erros} fora · maior combo ${maior} · calibração ${Math.round(atraso*1000)} ms` : '';
+}
+$('#degraus').innerHTML=COR.map((c,i)=>`<div style="--c:${c}"><b>×${i+1}</b><small>${BANDA[i]}</small></div>`).join('');
+
+// calibração: 10 arrastos junto com os traços (o baixo e a bateria tocam para guiar); o meio-termo do desvio, sem os 2 primeiros
+$('#cal').onclick=async()=>{ if(!rodando) await comeca(); calib=[]; combo=0; k=0; mudo.bateria=false; texto('arraste junto com cada batida'); pinta(); };
+function fimCalib(){ pinta(); if(calib.length<10) return;
+  const v=calib.map(x=>x+atraso).slice(2).sort((a,b)=>a-b); atraso=Math.max(-.2,Math.min(.35,v[Math.floor(v.length/2)]));
+  try{ localStorage.pulsar_atraso=atraso.toFixed(3); }catch(e){}
+  calib=null; camadas(); texto(`calibrado: ${Math.round(Math.abs(atraso)*1000)} ms ${atraso>=0?'depois':'antes'} da batida`); pinta(); }
+
+// entrada: qualquer toque na tela (fora dos botões) ou qualquer tecla
+addEventListener('pointerdown',e=>{ if(e.target.closest('button')) return; e.preventDefault(); arrasto(); });
+addEventListener('keydown',e=>{ if(e.ctrlKey||e.metaKey||e.altKey||e.key==='Tab') return; e.preventDefault(); if(!e.repeat) arrasto(); });
+
+// ---------- barras ----------
+const cv=$('#bar'), g=cv.getContext('2d'), W=cv.width, H=cv.height;
+function quadro(){
+  requestAnimationFrame(quadro);
+  g.clearRect(0,0,W,H);
+  const cx=W/2, cy=H/2, meio=W/2-6, agora=performance.now()/1000;
+  let pul=0;
+  if(rodando && ac && ult){ geraNotas(); const ouv=ouvido();
+    if(!calib) for(const n of notas) if(!n.ok && !n.perdida && n.T<ouv-atraso-JANELA){ n.perdida=true; if(combo>0){ erros++; quebra('perdeu a nota'); } }
+    const ant=notas.filter(n=>n.T<=ouv).pop(); if(ant) pul=Math.pow(Math.max(0,1-(ouv-ant.T)/(4*P)),4);
+    const gr=g.createLinearGradient(0,0,W,0); gr.addColorStop(0,'rgba(255,255,255,0)'); gr.addColorStop(.5,'rgba(255,255,255,.16)'); gr.addColorStop(1,'rgba(255,255,255,0)');
+    g.fillStyle=gr; g.fillRect(0,cy-2,W,4);
+    for(const n of notas){ if(n.ok||n.perdida) continue; const d=n.T-ouv; if(d<-.05||d>VER) continue; const x=Math.max(0,d)/VER*meio;
+      g.globalAlpha=Math.min(1,(1-d/VER)*2.2); g.fillStyle=calib?'#fff':COR[k]; const rab=Math.min(W/2,(n.dur||1)*P/VER*meio); g.globalAlpha*=.35; for(const s of [-1,1]) g.fillRect(s<0?cx-x-rab:cx+x,cy-5,rab,10); g.globalAlpha/=.35;
+      for(const s of [-1,1]) g.fillRect(cx+s*x-4,cy-22,8,44); }
+    g.globalAlpha=1; }
+  // a barra do meio: o alvo, do mesmo formato dos traços; pulsa no tempo, acende verde no acerto e vermelha no erro
+  const fa=fb?agora-fb.t:9, acende=fa<.22, cor=acende?(fb.ok?'#5dffa2':'#ff5a5a'):'#ffffff';
+  g.fillStyle='rgba(255,255,255,.12)'; g.fillRect(cx-14,cy-28,28,56);
+  g.save(); g.shadowColor=cor; g.shadowBlur=acende?18:6+10*pul; g.fillStyle=cor; g.globalAlpha=acende?1:.75+.25*pul;
+  const lg=acende?12:8; g.fillRect(cx-lg/2,cy-28,lg,56); g.restore();
+}
+window.__r={ estado:()=>({combo, k, atraso, ouvido:ac?ouvido():0, notas:notas.filter(n=>!n.ok&&!n.perdida).map(n=>({T:n.T})), mudo:{...mudo}}), arrasto };   // para os testes conferirem
+pinta(); quadro();
+</script>
+</body>
+</html>
