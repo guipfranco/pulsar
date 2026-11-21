@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Três linhas (esboços)</title>
+<style>
+:root{--bg:#0b0a18;--tx:#ece8ff;--mut:#9d96c4}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(80% 60% at 50% 20%,#1d1640,var(--bg));color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh;user-select:none;-webkit-user-select:none}
+main{max-width:640px;margin:0 auto;padding:16px 16px 30px}
+h1{font-size:20px;margin:0}
+p{color:var(--mut);margin:6px 0 0;font-size:14px}
+h2{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);margin:16px 0 8px}
+.bts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button,label.bt{font:inherit;font-weight:700;background:#2a2450;color:var(--tx);border:1px solid transparent;border-radius:99px;padding:8px 14px;cursor:pointer}
+button.on{background:#3b3270;border-color:#a9b8ff;box-shadow:0 0 12px rgba(169,184,255,.35)}
+button.g{background:#ffc861;color:#241a00;font-size:17px;padding:10px 22px}
+small.d{display:block;color:var(--mut);font-size:12.5px;margin-top:6px;min-height:18px}
+#palco{position:relative;margin-top:14px;touch-action:none}
+canvas{display:block;width:100%;height:min(62vh,520px);border-radius:16px;background:#0e0c22}
+#placar{display:flex;justify-content:space-between;color:var(--mut);font-size:13px;margin-top:8px;flex-wrap:wrap;gap:6px}
+#placar b{color:var(--tx)}
+.campos{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;margin-top:10px}
+.campos label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--mut)}
+.campos select,.campos input{font:inherit;color:var(--tx);background:#1a1536;border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:6px 8px;width:100%}
+.campos .larga{grid-column:1/-1}
+kbd{font:700 12px system-ui;background:#2a2450;border-radius:5px;padding:1px 6px;color:var(--tx)}
+</style>
+</head>
+<body>
+<main>
+<h1>Três linhas (esboços)</h1>
+<p>Você toca a melodia indo para a linha certa: grave, média ou aguda. Cada nota chega como um obstáculo com uma passagem só; vá para ela na hora com <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> ou <kbd>←</kbd> <kbd>↓</kbd> <kbd>→</kbd> (no celular, toque no terço da tela). Todo toque na hora toca a nota, mesmo se você já estiver na linha certa. O resto da música toca sozinho.</p>
+
+<div class="bts" style="margin-top:14px"><button class="g" id="vai">▶ Tocar</button><label class="bt" for="arq">Abrir .mid</label><input type="file" id="arq" accept=".mid,.midi,audio/midi" hidden><span id="locais" class="bts"></span></div>
+<small class="d" id="arqd"></small>
+<div id="trecho" class="campos" hidden>
+  <label class="larga">Faixa da melodia <select id="mFaixa"></select></label>
+  <label>Começa no compasso <input type="number" id="mIni" min="1" step="1"></label>
+  <label>Quantos compassos <select id="mN"><option value="8">8</option><option value="16">16</option><option value="32">32</option><option value="0">a música toda</option></select></label>
+</div>
+
+<h2>Abordagem</h2>
+<div class="bts" id="variantes"></div><small class="d" id="varianted"></small>
+
+<h2>Densidade</h2>
+<div class="bts" id="densidades"></div><small class="d" id="densidaded"></small>
+
+<h2>Velocidade</h2>
+<div class="bts" id="velocidades"></div>
+
+<div id="palco"><canvas id="cv"></canvas></div>
+<div id="placar"></div>
+</main>
+<script>
+// Esboços de "três linhas": a melodia vira um caminho de obstáculos com uma passagem só (grave, média ou aguda) e quem
+// joga vai para a passagem na hora da nota; o toque toca a nota. Duas abordagens: o avião no túnel (vista de trás, em
+// perspectiva) e o bichinho nas plataformas (vista de lado, grave embaixo e agudo em cima). O motor (MIDI, trecho,
+// densidade, som de videogame para o resto da música) é o do acordes.html. O .mid fica só no navegador.
+const $=s=>document.querySelector(s);
+const mtof=m=>440*Math.pow(2,(m-69)/12);
+const JAN=.17, VER=2.1;
+const CORL=['#4fa8ff','#5dffa2','#ffd84a'];             // grave, média, aguda
+let atraso=0; try{ const a=localStorage.pulsar_atraso??localStorage.ptui_ritmo_atraso; if(a!=null) atraso=+a; }catch(e){}
+
+// ---------------- MIDI ----------------
+function leMidi(buf){
+  const d=new DataView(buf); let p=0;
+  const u8=()=>d.getUint8(p++), u16=()=>{ const v=d.getUint16(p); p+=2; return v; }, u32=()=>{ const v=d.getUint32(p); p+=4; return v; };
+  const vlq=()=>{ let v=0,b; do{ b=u8(); v=v*128+(b&127); }while(b&128); return v; };
+  const txt=n=>{ let r=''; for(let i=0;i<n;i++) r+=String.fromCharCode(u8()); return r; };
+  if(txt(4)!=='MThd') throw Error('isso não parece um arquivo MIDI');
+  const hl=u32(); u16(); const nt=u16(), div=u16(); p=8+hl;
+  if(div&0x8000) throw Error('MIDI com tempo SMPTE: não sei ler esse tipo');
+  const faixas=[]; let tempo=null;
+  for(let k=0;k<nt && p+8<=d.byteLength;k++){
+    const id=txt(4), len=u32(), fim=Math.min(d.byteLength,p+len); if(id!=='MTrk'){ p=fim; continue; }
+    let tick=0, st=0, nome=''; const abertas={}, porCanal={};
+    while(p<fim){ tick+=vlq(); let b=u8();
+      if(b===0xFF){ const tp=u8(), l=vlq(), ini=p; if(tp===3 && !nome) nome=txt(l).trim(); else if(tp===0x51 && tempo==null) tempo=(d.getUint8(ini)<<16)|(d.getUint8(ini+1)<<8)|d.getUint8(ini+2); p=ini+l; continue; }
+      if(b===0xF0||b===0xF7){ const l=vlq(); p+=l; continue; }   // (p+=vlq() leria p antes de o vlq avançar)
+      if(b<0x80){ p--; b=st; } else st=b;
+      const ty=b>>4, ch=b&15, a=u8(), v=(ty===0xC||ty===0xD)?0:u8();
+      if(ty===0x9 && v>0) (abertas[ch*128+a]??=[]).push(tick);
+      else if(ty===0x8 || (ty===0x9 && v===0)){ const q=abertas[ch*128+a]; if(q&&q.length){ const t0=q.shift(); (porCanal[ch]??=[]).push({t:t0,d:Math.max(1,tick-t0),m:a}); } }
+    }
+    p=fim;
+    for(const ch of Object.keys(porCanal).map(Number)){ const ns=porCanal[ch].sort((x,y)=>x.t-y.t), ms=ns.map(n=>n.m).sort((a,b)=>a-b);
+      faixas.push({nome:(nome?nome.slice(0,40)+' · ':'')+(ch===9?'bateria':'canal '+(ch+1)), notas:ns, bateria:ch===9, med:ms[ms.length>>1]}); }
+  }
+  if(!faixas.some(f=>!f.bateria)) throw Error('nenhuma nota no arquivo');
+  return {ppq:div, bpm:tempo?Math.round(60e6/tempo):120, faixas};
+}
+function chutaMelodia(M){ let best=0, bv=-1;
+  M.faixas.forEach((f,i)=>{ if(f.bateria) return; const mono=new Set(f.notas.map(n=>n.t)).size/f.notas.length;
+    const v=Math.min(f.notas.length,400)*mono*mono*(f.med>=57&&f.med<=86?1:.3); if(v>bv){ bv=v; best=i; } }); return best; }
+const compassos=M=>{ const BT=M.ppq*4; return Math.ceil(Math.max(...M.faixas.map(f=>{ const u=f.notas[f.notas.length-1]; return u.t+u.d; }))/BT); };
+function melhorInicio(M,fi,n){ const BT=M.ppq*4, ns=M.faixas[fi].notas, tot=compassos(M), por=new Array(tot+n).fill(0);
+  for(const x of ns) por[Math.floor(x.t/BT)]++;
+  const jan=b=>por.slice(b,b+n).reduce((a,c)=>a+c,0); let mx=0; for(let b=0;b<tot;b++) mx=Math.max(mx,jan(b));
+  for(let b=0;b<tot;b++) if(jan(b)>=mx*.7 && por[b]>0) return b; return 0; }
+// a música do trecho: as suas notas (a de cima de cada momento da melodia), com a linha de cada uma, e o resto que toca sozinho
+let MUS=null, MID=null, CFG=null;
+function prepara(M,cfg){
+  const S=M.ppq/4, BT=S*16, tol=M.ppq/8, unica=M.faixas.filter(f=>!f.bateria).length===1;
+  const t0=cfg.ini*BT, t1=cfg.n?t0+cfg.n*BT:compassos(M)*BT, L=Math.round((t1-t0)/S);
+  const dentro=n=>n.t>=t0-tol && n.t<t1-tol, x=n=>Math.max(0,(n.t-t0)/S);
+  const gs=[]; for(const n of M.faixas[cfg.faixa].notas.filter(dentro)){ const g=gs[gs.length-1]; if(g && n.t-g.t<=tol) g.n.push(n); else gs.push({t:n.t,n:[n]}); }
+  const grupos=[], tl=[];
+  for(const gg of gs){ const ms=[...new Set(gg.n.map(n=>n.m))].sort((a,b)=>a-b), m=ms[ms.length-1], xg=x(gg.n[0]), sg=Math.round(xg);
+    const g={s:sg, off:xg-sg, m, d:Math.max(1,Math.max(...gg.n.map(n=>n.d))/S)}; grupos.push(g); tl.push({x:xg,g});
+    for(const n of gg.n) if(n.m!==m) tl.push({x:x(n), m:n.m, d:n.d/S, tipo:unica&&n.m<55?'tri':'mel', vol:.6}); }
+  M.faixas.forEach((f,fi)=>{ if(fi===cfg.faixa) return; const tipo=f.bateria?'bat':f.med<50?'tri':'acomp';
+    for(const n of f.notas) if(dentro(n)) tl.push({x:x(n), m:n.m, d:n.d/S, tipo, vol:1}); });
+  tl.sort((a,b)=>a.x-b.x);
+  // a linha de cada nota: as alturas do trecho, da mais grave à mais aguda, divididas em três partes com mais ou menos
+  // o mesmo número de notas (a mesma altura cai sempre na mesma linha, e as três linhas são usadas)
+  const alt=[...new Set(grupos.map(g=>g.m))].sort((a,b)=>a-b), cont={}, lin={};
+  for(const g of grupos) cont[g.m]=(cont[g.m]||0)+1;
+  let acum=0; for(const m of alt){ const f=(acum+cont[m]/2)/grupos.length; lin[m]= alt.length===1?1 : alt.length===2?(m===alt[0]?0:2) : f<1/3?0:f<2/3?1:2; acum+=cont[m]; }
+  for(const g of grupos) g.linha=lin[g.m];
+  return {bpm:M.bpm, L, grupos, tl, unica, alt};
+}
+
+// ---------------- som (videogame: pulso na melodia, triângulo no baixo, quadrada abafada no resto, ruído na bateria) ----------------
+let ac=null, master, ruido, PULSO, saidaFinal=null;
+function novaSaida(){ if(saidaFinal) saidaFinal.disconnect();
+  master=ac.createDynamicsCompressor(); master.threshold.value=-14; master.ratio.value=4; saidaFinal=ac.createGain(); saidaFinal.gain.value=.8; master.connect(saidaFinal); saidaFinal.connect(ac.destination); }
+function monta(){
+  ac=new (window.AudioContext||window.webkitAudioContext)(); novaSaida();
+  const N=40, re=new Float32Array(N), im=new Float32Array(N), D=.25;
+  for(let n=1;n<N;n++){ re[n]=Math.sin(2*Math.PI*n*D)/(Math.PI*n); im[n]=(1-Math.cos(2*Math.PI*n*D))/(Math.PI*n); }
+  PULSO=ac.createPeriodicWave(re,im);
+  ruido=ac.createBuffer(1,ac.sampleRate,ac.sampleRate); const d=ruido.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+}
+function env(){ const g=ac.createGain(); g.gain.value=0; g.gain.setValueAtTime(0,0); return g; }
+function voz(T,m,dur,tipo='mel',vol=1){
+  const o=ac.createOscillator(), g=env(); let saida=g, v;
+  if(tipo==='tri'){ o.type='triangle'; v=.2; }
+  else if(tipo==='acomp'){ o.type='square'; v=.026; const lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=2200; g.connect(lp); saida=lp; }
+  else { o.setPeriodicWave(PULSO); v=.09; }
+  v*=vol; o.frequency.value=mtof(m); dur=Math.max(.06,dur);
+  g.gain.setValueAtTime(v,T); g.gain.setValueAtTime(v,T+dur*.85); g.gain.linearRampToValueAtTime(0,T+dur);
+  o.connect(g); saida.connect(master); o.start(T); o.stop(T+dur+.05);
+}
+function ruidoEm(T,f,tipoF,v,dec){ const s=ac.createBufferSource(), fl=ac.createBiquadFilter(), g=env(); s.buffer=ruido; fl.type=tipoF; fl.frequency.value=f;
+  g.gain.setValueAtTime(v,T); g.gain.exponentialRampToValueAtTime(.001,T+dec); s.connect(fl); fl.connect(g); g.connect(master); s.start(T); s.stop(T+dec+.05); }
+function bateria(T,m){
+  if(m===35||m===36){ const o=ac.createOscillator(), g=env(); o.type='triangle'; o.frequency.setValueAtTime(160,T); o.frequency.exponentialRampToValueAtTime(45,T+.12);
+    g.gain.setValueAtTime(.45,T); g.gain.exponentialRampToValueAtTime(.001,T+.18); o.connect(g); g.connect(master); o.start(T); o.stop(T+.2); return; }
+  if(m>=37&&m<=40) return ruidoEm(T,1800,'bandpass',.22,.13);
+  if(m===46) return ruidoEm(T,7000,'highpass',.07,.2);
+  if(m===49||m===52||m===55||m===57) return ruidoEm(T,5000,'highpass',.07,.6);
+  ruidoEm(T,8000,'highpass',.05,.045);
+}
+function toca(e,T){ if(e.tipo==='bat') bateria(T,e.m); else voz(T,e.m,e.d*P*.95,e.tipo,e.vol); }
+function tique(T,forte){ ruidoEm(T,forte?5000:8000,'highpass',forte?.09:.05,.05); }
+function baque(){ const T=ac.currentTime, o=ac.createOscillator(), g=env(); o.type='square'; o.frequency.setValueAtTime(110,T); o.frequency.exponentialRampToValueAtTime(40,T+.15);
+  const lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=600; g.gain.setValueAtTime(.16,T); g.gain.exponentialRampToValueAtTime(.001,T+.18); o.connect(lp); lp.connect(g); g.connect(master); o.start(T); o.stop(T+.2); }
+
+// ---------------- regras ----------------
+const VARIANTES={
+  aviao:{nome:'Avião no túnel', d:'Vista de trás, em perspectiva. Cada nota é uma parede com uma janela acesa (esquerda grave, meio, direita aguda); o avião vai para a janela na hora. Nota longa vira um corredor: o rastro mostra quanto ela dura.'},
+  bicho:{nome:'Bichinho nas plataformas', d:'Vista de lado. Cada nota é uma plataforma numa de três alturas (embaixo grave, no meio, em cima aguda); o bichinho pula para ela na hora. Dá para ver a melodia subindo e descendo antes de chegar. Nota longa é plataforma comprida.'},
+};
+const DENSIDADES={
+  todas:{nome:'Todas', d:'Todas as notas da melodia são obstáculos.', f:()=>true},
+  tempos:{nome:'Uma por tempo', d:'Só as que caem no tempo viram obstáculo; as outras tocam sozinhas.', f:g=>g.off<.25 && g.s%4===0},
+  fortes:{nome:'Duas por compasso', d:'Só as do 1º e do 3º tempo; o resto toca sozinho. Um modo fácil.', f:g=>g.off<.25 && g.s%8===0},
+};
+const VELOCIDADES={'.6':{nome:'60%'},'.8':{nome:'80%'},'1':{nome:'100%'}};
+let variante='aviao', densidade='tempos', velocidade='.8';
+
+let tocando=false, T0=0, P=.1, volta=0, idx=0, proxTique=0, fila=[], retorno=null;
+let jog={linha:1, de:1, t:0, bate:-9};                    // onde está o personagem (e de onde veio, para o pulo)
+let est={perf:0, err:0, perd:0, combo:0, maior:0};
+const ouvido=()=>ac.currentTime-(ac.outputLatency||ac.baseLatency||0);
+
+function gera(){
+  if(!MUS.tl.length || !MUS.L) return;
+  const ate=ac.currentTime+VER+.4, f=DENSIDADES[densidade].f;
+  for(let guarda=0; guarda<5000; guarda++){
+    if(idx>=MUS.tl.length){ idx=0; volta++; }
+    const e=MUS.tl[idx], T=T0+(volta*MUS.L+e.x)*P; if(T>ate) return; idx++;
+    if(e.g){ const g=e.g, meu=f(g); fila.push({T, g, meu, julgado:!meu, res:0}); if(!meu) voz(T,g.m,g.d*P*.95); }
+    else toca(e,T);
+  }
+}
+function tiques(){ const ate=ac.currentTime+.3; while(proxTique<ate){ const k=Math.round((proxTique-T0)/(P*4)); tique(proxTique,k%4===0); proxTique+=P*4; } }
+function move(l){ const agora=performance.now()/1000; jog={...jog, de:posLinha(agora), linha:l, t:agora}; }
+function posLinha(agora){ const e=Math.min(1,(agora-jog.t)/.12); return jog.de+(jog.linha-jog.de)*e; }
+function aviso(txt,tipo){ retorno={txt,tipo,t:performance.now()}; }
+function julga(i,ok,motivo){ i.julgado=true; i.res=ok?1:-1;
+  if(ok){ est.perf++; est.combo++; est.maior=Math.max(est.maior,est.combo); aviso('na nota!',1); }
+  else { est.combo=0; if(motivo==='parede'){ est.err++; baque(); jog.bate=performance.now()/1000; aviso('bateu!',-1); } else { est.perd++; aviso('perdeu a nota',0); } } }
+
+// toque numa linha: vai para ela; se houver uma nota chegando, é na passagem dela que tinha de ir
+function aperta(l){
+  if(!tocando) return; move(l);
+  const t=ouvido()-atraso; let m=null, e=JAN;
+  for(const i of fila) if(i.meu && !i.julgado && Math.abs(i.T-t)<=e){ e=Math.abs(i.T-t); m=i; }
+  if(!m) return;
+  if(m.g.linha===l){ voz(ac.currentTime,m.g.m,Math.max(.06,m.T+m.g.d*P*.95-t)); julga(m,true); }
+  else julga(m,false,'parede');
+}
+function relogio(){
+  if(!tocando) return; gera(); if(!MID.faixas.some(f=>f.bateria)) tiques();
+  const t=ouvido()-atraso;
+  for(const i of fila) if(i.meu && !i.julgado && t>i.T+JAN) julga(i,false, jog.linha===i.g.linha?'perdeu':'parede');
+  fila=fila.filter(i=>i.T>t-2);
+}
+async function comeca(){
+  if(!MUS){ $('#arqd').textContent='Abra um arquivo .mid primeiro.'; return; }
+  if(!ac) monta(); else novaSaida(); await ac.resume();
+  P=60/(MUS.bpm*+velocidade)/4; T0=ac.currentTime+.8; proxTique=T0; volta=0; idx=0; fila=[];
+  const g0=MUS.grupos.find(g=>DENSIDADES[densidade].f(g)); jog={linha:g0?g0.linha:1, de:g0?g0.linha:1, t:0, bate:-9};
+  est={perf:0,err:0,perd:0,combo:0,maior:0}; tocando=true; $('#vai').textContent='■ Parar';
+  clearInterval(comeca.id); comeca.id=setInterval(relogio,5); relogio();
+}
+function para(){ tocando=false; clearInterval(comeca.id); if(ac) ac.suspend(); $('#vai').textContent='▶ Tocar'; }
+$('#vai').onclick=()=>tocando?para():comeca();
+addEventListener('pagehide',para); document.addEventListener('visibilitychange',()=>{ if(document.hidden && tocando) para(); });
+
+// entrada: A S D, setas, ou tocar no terço da tela (de lado no avião; de baixo para cima no bichinho)
+const TECLA={KeyA:0, KeyS:1, KeyD:2, ArrowLeft:0, ArrowDown:1, ArrowRight:2, ArrowUp:2, KeyJ:0, KeyK:1, KeyL:2};
+addEventListener('keydown',e=>{ if(e.ctrlKey||e.metaKey||e.altKey||e.repeat) return; if(e.target.closest('input,select')) return; const l=TECLA[e.code]; if(l==null) return; e.preventDefault(); aperta(l); });
+$('#palco').addEventListener('pointerdown',e=>{ e.preventDefault(); const r=cv.getBoundingClientRect();
+  const l = variante==='aviao' ? Math.min(2,Math.floor((e.clientX-r.left)/r.width*3)) : 2-Math.min(2,Math.floor((e.clientY-r.top)/r.height*3)); aperta(l); });
+
+// ---------------- desenho ----------------
+const cv=$('#cv'), g=cv.getContext('2d');
+function tamanho(){ const r=cv.getBoundingClientRect(), dpr=Math.min(2,devicePixelRatio||1); cv.width=r.width*dpr; cv.height=r.height*dpr; g.setTransform(dpr,0,0,dpr,0,0); }
+addEventListener('resize',tamanho); tamanho();
+const proj=(d,H)=>{ const k=1/(1+2.6*Math.max(-.2,d)), hy=H*.1, ly=H*.8; return {k, y:hy+(ly-hy)*k}; };
+
+function desenhaAviao(W,H,t,agora){
+  const cx=W/2, larg=Math.min(W*.9,460), top=proj(1,H), bot=proj(0,H), ex=proj(-.15,H), lx=(l,k)=>cx+(l-1)*larg/3*k;
+  // chão do túnel e as divisórias das três linhas
+  g.fillStyle='rgba(255,255,255,.035)'; g.beginPath(); g.moveTo(cx-larg/2*top.k,top.y); g.lineTo(cx+larg/2*top.k,top.y); g.lineTo(cx+larg/2*ex.k,ex.y); g.lineTo(cx-larg/2*ex.k,ex.y); g.fill();
+  g.strokeStyle='rgba(255,255,255,.09)'; g.lineWidth=1; for(const f of [-1/6,1/6]){ g.beginPath(); g.moveTo(cx+larg*f*top.k,top.y); g.lineTo(cx+larg*f*ex.k,ex.y); g.stroke(); }
+  const b0=Math.ceil((t-T0)/(P*4)); for(let b=b0;;b++){ const d=(T0+b*P*4-t)/VER; if(d>1) break; if(d<-.12) continue; const q=proj(d,H);
+    g.strokeStyle=b%4===0?'rgba(255,255,255,.12)':'rgba(255,255,255,.04)'; g.beginPath(); g.moveTo(cx-larg/2*q.k,q.y); g.lineTo(cx+larg/2*q.k,q.y); g.stroke(); }
+  // as paredes, de trás para a frente
+  const vis=fila.filter(i=>i.meu && (i.T-t)/VER<=1.05 && (i.T-t)/VER>=-.12).reverse();
+  for(const i of vis){ const d=(i.T-t)/VER, q=proj(d,H), alt=110*q.k, w=larg/3*q.k, L=i.g.linha, cor=CORL[L];
+    // o corredor da nota longa: um rastro na linha aberta
+    const fimD=Math.min(1.05,(i.T+i.g.d*P-t)/VER), qf=proj(fimD,H);
+    if(i.g.d>2 && i.res>=0){ g.globalAlpha=.22; g.fillStyle=cor; g.beginPath(); g.moveTo(lx(L,q.k)-w*.35,q.y); g.lineTo(lx(L,q.k)+w*.35,q.y); g.lineTo(lx(L,qf.k)+w*.35*qf.k/q.k,qf.y); g.lineTo(lx(L,qf.k)-w*.35*qf.k/q.k,qf.y); g.fill(); }
+    g.globalAlpha=i.julgado?(i.res>0?.15:.45):1;
+    for(let l=0;l<3;l++){ const x=lx(l,q.k);
+      if(l===L){ g.strokeStyle=cor; g.lineWidth=Math.max(1.5,4*q.k); g.shadowColor=cor; g.shadowBlur=14*q.k; g.strokeRect(x-w/2+2,q.y-alt,w-4,alt); g.shadowBlur=0;
+        g.fillStyle=cor; g.globalAlpha*=.18; g.fillRect(x-w/2+2,q.y-alt,w-4,alt); g.globalAlpha=i.julgado?(i.res>0?.15:.45):1; }
+      else { g.fillStyle=i.res<0?'#5a2030':'#2b2650'; g.fillRect(x-w/2,q.y-alt,w,alt); g.strokeStyle='rgba(255,255,255,.12)'; g.lineWidth=1; g.strokeRect(x-w/2,q.y-alt,w,alt); } }
+    g.globalAlpha=1; }
+  // o avião
+  const pl=posLinha(agora), bate=agora-jog.bate<.3, tremor=bate?Math.sin(agora*90)*6*(1-(agora-jog.bate)/.3):0;
+  const px=lx(pl,bot.k)+tremor, py=bot.y-18, inc=(jog.linha-pl)*.5;
+  g.save(); g.translate(px,py); g.rotate(inc*.35);
+  g.fillStyle=bate?'#ff5a5a':'#ece8ff'; g.beginPath(); g.moveTo(0,-22); g.lineTo(9,6); g.lineTo(30,14); g.lineTo(9,14); g.lineTo(0,22); g.lineTo(-9,14); g.lineTo(-30,14); g.lineTo(-9,6); g.closePath(); g.fill();
+  g.fillStyle=CORL[jog.linha]; g.beginPath(); g.arc(0,-4,4,0,7); g.fill(); g.restore();
+  // as teclas embaixo de cada linha
+  g.font='700 13px system-ui'; g.textAlign='center'; ['A ←','S ↓','D →'].forEach((s,l)=>{ g.fillStyle=l===jog.linha?CORL[l]:'rgba(255,255,255,.35)'; g.fillText(s,lx(l,ex.k),H-10); });
+}
+
+function desenhaBicho(W,H,t,agora){
+  const x0=W*.2, vel=(W*.78)/VER, yL=l=>H*(.8-.27*l), alto=18;
+  // as três alturas
+  for(let l=0;l<3;l++){ g.strokeStyle='rgba(255,255,255,.07)'; g.lineWidth=1; g.setLineDash([4,8]); g.beginPath(); g.moveTo(0,yL(l)); g.lineTo(W,yL(l)); g.stroke(); g.setLineDash([]);
+    g.fillStyle=l===jog.linha?CORL[l]:'rgba(255,255,255,.3)'; g.font='700 12px system-ui'; g.textAlign='left'; g.fillText(['A ← grave','S ↓','D → agudo'][l],8,yL(l)-8); }
+  // tempos
+  const b0=Math.floor((t-T0)/(P*4)); for(let b=b0;;b++){ const x=x0+(T0+b*P*4-t)*vel; if(x>W) break; if(x<0) continue; g.strokeStyle=b%4===0?'rgba(255,255,255,.1)':'rgba(255,255,255,.035)'; g.beginPath(); g.moveTo(x,H*.1); g.lineTo(x,H*.9); g.stroke(); }
+  // as notas que tocam sozinhas, em pontinhos (para ver a melodia inteira)
+  for(const i of fila){ if(i.meu) continue; const x=x0+(i.T-t)*vel; if(x<-10||x>W+10) continue; g.fillStyle='rgba(255,255,255,.18)'; g.beginPath(); g.arc(x,yL(i.g.linha)+alto/2,3,0,7); g.fill(); }
+  // as plataformas
+  for(const i of fila){ if(!i.meu) continue; const x=x0+(i.T-t)*vel, w=Math.max(26,i.g.d*P*vel-6); if(x+w<-10||x>W+10) continue;
+    const y=yL(i.g.linha), cor=CORL[i.g.linha];
+    g.globalAlpha=i.julgado?(i.res>0?.35:.25):1; g.fillStyle=i.res<0?'#ff5a5a':cor; g.shadowColor=cor; g.shadowBlur=i.julgado?0:10;
+    g.beginPath(); g.roundRect?g.roundRect(x-8,y,w,alto,6):g.rect(x-8,y,w,alto); g.fill(); g.shadowBlur=0; g.globalAlpha=1; }
+  // o bichinho: pula de uma altura para a outra num arco
+  const e=Math.min(1,(agora-jog.t)/.14), yy=yL(jog.de)+(yL(jog.linha)-yL(jog.de))*e - Math.sin(Math.PI*e)*28*(jog.t?1:0);
+  const bate=agora-jog.bate<.3, tremor=bate?Math.sin(agora*90)*5*(1-(agora-jog.bate)/.3):0, r=15, cy=yy-r+tremor;
+  g.fillStyle=bate?'#ff5a5a':'#ece8ff'; g.beginPath(); g.ellipse(x0,cy,r*1.05,r*(e<1?1.12:1),0,0,7); g.fill();
+  g.fillStyle='#140f2c'; g.beginPath(); g.arc(x0+5,cy-4,2.6,0,7); g.arc(x0+11,cy-4,2.6,0,7); g.fill();
+  g.fillStyle=CORL[jog.linha]; g.beginPath(); g.arc(x0-9,cy+3,3.5,0,7); g.fill();
+}
+
+function quadro(){
+  requestAnimationFrame(quadro);
+  const W=cv.clientWidth, H=cv.clientHeight; g.clearRect(0,0,W,H);
+  if(!ac||!tocando){ g.fillStyle='rgba(255,255,255,.5)'; g.font='600 15px system-ui'; g.textAlign='center'; g.fillText(MUS?'toque em ▶ Tocar':'abra um arquivo .mid',W/2,H/2); return; }
+  const t=ouvido()-atraso, agora=performance.now()/1000;
+  (variante==='aviao'?desenhaAviao:desenhaBicho)(W,H,t,agora);
+  const fb=retorno&&performance.now()-retorno.t<350?retorno:null;
+  if(fb){ g.fillStyle=fb.tipo>0?'#5dffa2':fb.tipo<0?'#ff5a5a':'#ffd84a'; g.font='800 18px system-ui'; g.textAlign='center'; g.fillText(fb.txt,W/2,26); }
+  const tot=est.perf+est.err+est.perd;
+  $('#placar').innerHTML=`<span>combo <b>${est.combo}</b> (maior ${est.maior})</span><span><b>${est.perf}</b> na nota · ${est.err} bateu · ${est.perd} perdidas</span><span>${tot?Math.round(est.perf/tot*100):0}%</span>`;
+}
+
+// ---------------- tela ----------------
+function grupo(sel,itens,set){ const el=$(sel); el.innerHTML=Object.entries(itens).map(([k,o])=>`<button data-k="${k}">${o.nome}</button>`).join('');
+  el.onclick=e=>{ const b=e.target.closest('button'); if(!b) return; const t=tocando; set(b.dataset.k); if(t) comeca(); pinta(); }; }
+grupo('#variantes',VARIANTES,k=>variante=k);
+grupo('#densidades',DENSIDADES,k=>densidade=k);
+grupo('#velocidades',VELOCIDADES,k=>velocidade=k);
+function pinta(){
+  const marca=(sel,k)=>document.querySelectorAll(sel+' button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));
+  marca('#variantes',variante); marca('#densidades',densidade); marca('#velocidades',velocidade);
+  $('#varianted').textContent=VARIANTES[variante].d; $('#densidaded').textContent=DENSIDADES[densidade].d;
+}
+const nomeNota=m=>['Dó','Dó♯','Ré','Mi♭','Mi','Fá','Fá♯','Sol','Lá♭','Lá','Si♭','Si'][m%12]+(Math.floor(m/12)-1);
+function aplica(){
+  MUS=prepara(MID,CFG);
+  const h=[0,0,0]; for(const x of MUS.grupos) h[x.linha]++;
+  const tot=compassos(MID), fimC=CFG.n?Math.min(tot,CFG.ini+CFG.n):tot;
+  $('#arqd').textContent=`${CFG.arquivo} · ${MID.bpm} bpm · trecho ${CFG.ini+1} a ${fimC} de ${tot} · ${MUS.grupos.length} notas da melodia (grave ${h[0]}, meio ${h[1]}, aguda ${h[2]}; de ${nomeNota(MUS.alt[0])} a ${nomeNota(MUS.alt[MUS.alt.length-1])}) · fica só neste navegador`;
+  $('#trecho').hidden=false;
+  $('#mFaixa').innerHTML=MID.faixas.map((f,i)=>f.bateria?'':`<option value="${i}">${f.nome.replace(/[<&]/g,'')} (${f.notas.length} notas)</option>`).join('');
+  $('#mFaixa').value=CFG.faixa; $('#mIni').value=CFG.ini+1; $('#mN').value=CFG.n;
+  if(tocando) comeca();
+}
+function abre(nome,buf){
+  try{ MID=leMidi(buf); }catch(err){ $('#arqd').textContent='Não deu para ler: '+err.message; return; }
+  const fi=chutaMelodia(MID), n=compassos(MID)<=24?0:16;
+  CFG={arquivo:nome, faixa:fi, ini:n?melhorInicio(MID,fi,n):0, n}; aplica();
+}
+$('#mFaixa').onchange=e=>{ CFG.faixa=+e.target.value; if(CFG.n) CFG.ini=melhorInicio(MID,CFG.faixa,CFG.n); aplica(); };
+$('#mIni').onchange=e=>{ CFG.ini=Math.max(0,Math.min(compassos(MID)-1,(+e.target.value||1)-1)); aplica(); };
+$('#mN').onchange=e=>{ CFG.n=+e.target.value; if(!CFG.n) CFG.ini=0; aplica(); };
+$('#arq').onchange=async e=>{ const f=e.target.files[0]; if(f) abre(f.name, await f.arrayBuffer()); e.target.value=''; };
+const abreUrl=u=>fetch(u).then(r=>{ if(!r.ok) throw Error('erro '+r.status); return r.arrayBuffer(); }).then(b=>abre(decodeURIComponent(u.split('/').pop()),b)).catch(err=>$('#arqd').textContent='Não deu para abrir '+u+': '+err.message);
+// no servidor local, atalhos para os MIDIs da pasta midis/ (que não vai para o repositório)
+if(/^(localhost|127\.)/.test(location.hostname)){
+  $('#locais').innerHTML='<button data-u="midis/hammer-bros.mid">Hammer Bros</button><button data-u="midis/one-more-time.mid">One More Time</button>';
+  $('#locais').onclick=e=>{ const b=e.target.closest('button'); if(b) abreUrl(b.dataset.u); };
+}
+const pedido=new URLSearchParams(location.search).get('midi');
+if(pedido) abreUrl(pedido); else $('#arqd').textContent='Abra um arquivo .mid (fica só neste navegador).';
+window.__linhas={mus:()=>MUS, fila:()=>fila, aperta, estado:()=>({tocando,variante,densidade,velocidade,P,jog:{...jog},est:{...est}})};
+pinta(); quadro();
+</script>
+</body>
+</html>
