@@ -23,6 +23,9 @@ label.bt{font-weight:700;background:#2a2450;border-radius:99px;padding:8px 14px;
 .campos label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--mut)}
 .campos select,.campos input{font:inherit;color:var(--tx);background:#1a1536;border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:6px 8px;width:100%}
 .campos .larga{grid-column:1/-1}
+.instrs{display:flex;flex-direction:column;gap:6px;margin-top:10px;font-size:13.5px}
+.instrs label{display:flex;gap:8px;align-items:center;color:var(--tx)}
+.instrs small{color:var(--mut)}
 #silabas div{height:74px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font:900 clamp(13px,5vw,30px)/1 system-ui,sans-serif;color:var(--mut);transition:background .08s,transform .08s}
 #silabas div.on{background:var(--fc);color:#140f2c;transform:scale(1.06);box-shadow:0 0 22px var(--fc)}
 #dica{text-align:center;color:var(--mut);font-size:13px;margin-top:10px;min-height:20px}
@@ -50,6 +53,9 @@ label.bt{font-weight:700;background:#2a2450;border-radius:99px;padding:8px 14px;
     <label>Oitava <select id="mOit"><option value="auto">automática</option><option value="-12">uma abaixo</option><option value="0">como no arquivo</option><option value="12">uma acima</option></select></label>
   </div>
   <small class="d" id="mInfo"></small>
+  <h2>Banda</h2>
+  <div class="bts" id="bandas"></div><small class="d" id="bandad"></small>
+  <div id="instrs" class="instrs"></div>
 </div>
 
 <h2>Timbre da voz</h2>
@@ -98,7 +104,7 @@ const CORTE=[380,900,2400,14000];
 const RIFF=[0,null,2,1,null,2,null,3,2,null,1,null,0,2,null,1];
 
 let ac=null, master, musica, filtro, bombeio, vozBus, ruido, eco, agendados=[];
-let tocando=false, prox=0, passo=0, timer=null, nivel=0, frase='escada', timbre='vocoder', modo='sozinha';
+let tocando=false, prox=0, passo=0, timer=null, nivel=0, frase='escada', timbre='vocoder', modo='sozinha', banda='arquivo';
 let vozes=[];   // sílabas agendadas: {T, m, v, d, i, feita}
 
 function monta(){
@@ -107,7 +113,7 @@ function monta(){
   const saida=ac.createGain(); saida.gain.value=.7; master.connect(saida); saida.connect(ac.destination);
   musica=ac.createGain(); filtro=ac.createBiquadFilter(); filtro.type='lowpass'; filtro.Q.value=7; filtro.frequency.value=CORTE[0];
   bombeio=ac.createGain(); musica.connect(filtro); filtro.connect(bombeio); bombeio.connect(master);
-  vozBus=ac.createGain(); vozBus.gain.value=.36; vozBus.connect(master);
+  vozBus=ac.createGain(); vozBus.gain.value=.44; vozBus.connect(master);
   eco=ac.createDelay(1); const fb=ac.createGain(), lp=ac.createBiquadFilter(), ret=ac.createGain();
   eco.delayTime.value=P*3; fb.gain.value=.3; lp.type='lowpass'; lp.frequency.value=2200; ret.gain.value=.28;
   vozBus.connect(eco); eco.connect(lp); lp.connect(fb); fb.connect(eco); lp.connect(ret); ret.connect(master);
@@ -118,8 +124,8 @@ function env(){ const g=ac.createGain(); g.gain.value=0; g.gain.setValueAtTime(0
 function osc(tipo,f,T,fim){ const o=ac.createOscillator(); o.type=tipo; o.frequency.value=f; o.start(T); o.stop(fim); return o; }
 function barulho(T,fim){ const s=ac.createBufferSource(); s.buffer=ruido; s.start(T); s.stop(fim); return s; }
 
-function bumbo(T){ const o=osc('sine',150,T,T+.4), g=env(); o.frequency.setValueAtTime(150,T); o.frequency.exponentialRampToValueAtTime(45,T+.11);
-  g.gain.setValueAtTime(.8,T); g.gain.exponentialRampToValueAtTime(.001,T+.35); o.connect(g); g.connect(master);
+function bumbo(T,v=.8){ const o=osc('sine',150,T,T+.4), g=env(); o.frequency.setValueAtTime(150,T); o.frequency.exponentialRampToValueAtTime(45,T+.11);
+  g.gain.setValueAtTime(v,T); g.gain.exponentialRampToValueAtTime(.001,T+.35); o.connect(g); g.connect(master);
   // o "bombeio": a música abaixa a cada bumbo e volta
   bombeio.gain.cancelScheduledValues(T); bombeio.gain.setValueAtTime(.3,T); bombeio.gain.linearRampToValueAtTime(1,T+P*3.3); }
 function palma(T){ const s=barulho(T,T+.3), bp=ac.createBiquadFilter(), g=env(); bp.type='bandpass'; bp.frequency.value=1300; bp.Q.value=1.2;
@@ -133,6 +139,53 @@ function baixo(T,m){ const o=osc('sawtooth',mtof(m),T,T+.3), lp=ac.createBiquadF
 function riff(T,m){ const f=mtof(m), a=osc('square',f,T,T+.25), b=osc('sawtooth',f,T,T+.25), lp=ac.createBiquadFilter(), g=env();
   b.detune.value=9; lp.type='lowpass'; lp.Q.value=9; lp.frequency.setValueAtTime(3800,T); lp.frequency.exponentialRampToValueAtTime(420,T+.11);
   g.gain.setValueAtTime(.16,T); g.gain.exponentialRampToValueAtTime(.001,T+.16); a.connect(lp); b.connect(lp); lp.connect(g); g.connect(musica); }
+// ---- instrumentos para tocar a banda de um arquivo MIDI ----
+function caixa(T){ const s=barulho(T,T+.3), bp=ac.createBiquadFilter(), g=env(), o=osc('triangle',185,T,T+.15), go=env(); bp.type='bandpass'; bp.frequency.value=2200; bp.Q.value=.8;
+  g.gain.setValueAtTime(.38,T); g.gain.exponentialRampToValueAtTime(.001,T+.18); s.connect(bp); bp.connect(g); g.connect(musica);
+  go.gain.setValueAtTime(.25,T); go.gain.exponentialRampToValueAtTime(.001,T+.1); o.connect(go); go.connect(musica); }
+function prato(T,longo){ const s=barulho(T,T+(longo?1.3:.5)), hp=ac.createBiquadFilter(), g=env(); hp.type='highpass'; hp.frequency.value=longo?5000:8000;
+  g.gain.setValueAtTime(longo?.16:.12,T); g.gain.exponentialRampToValueAtTime(.001,T+(longo?1.2:.35)); s.connect(hp); hp.connect(g); g.connect(musica); }
+function chimbalAberto(T){ const s=barulho(T,T+.4), hp=ac.createBiquadFilter(), g=env(); hp.type='highpass'; hp.frequency.value=7000;
+  g.gain.setValueAtTime(.2,T); g.gain.exponentialRampToValueAtTime(.001,T+.32); s.connect(hp); hp.connect(g); g.connect(musica); }
+function tom(T,m){ const o=osc('sine',mtof(m),T,T+.4), g=env(); o.frequency.setValueAtTime(mtof(m)*1.6,T); o.frequency.exponentialRampToValueAtTime(mtof(m),T+.08);
+  g.gain.setValueAtTime(.4,T); g.gain.exponentialRampToValueAtTime(.001,T+.3); o.connect(g); g.connect(musica); }
+let ultBumbo=-1;
+function bateria(T,m){
+  if(m===35||m===36){ if(Math.abs(T-ultBumbo)<.04) return; ultBumbo=T; return bumbo(T,.6); }   // arquivos que dobram o bumbo (35 e 36 juntos) somariam e distorceriam
+  if(m===38||m===40||m===37) return caixa(T);
+  if(m===39) return palma(T);
+  if(m===42||m===44) return chimbal(T);
+  if(m===46) return chimbalAberto(T);
+  if(m===49||m===52||m===55||m===57) return prato(T,true);
+  if(m===51||m===53||m===59) return prato(T,false);
+  if(m>=41&&m<=50) return tom(T,m+12);
+  chimbal(T);
+}
+// nota com começo, meio e fim (para pads e notas longas)
+function sustenta(g,T,v,ata,dur,sol){ g.gain.setValueAtTime(0,T); g.gain.linearRampToValueAtTime(v,T+ata); g.gain.setValueAtTime(v,T+Math.max(ata,dur)); g.gain.exponentialRampToValueAtTime(.0001,T+Math.max(ata,dur)+sol); }
+function pad(T,m,dur){ const f=mtof(m), fim=T+dur+.5, g=env(), lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=1700; lp.Q.value=1;
+  for(const dt of [-8,8]){ const o=osc('sawtooth',f,T,fim); o.detune.value=dt; o.connect(lp); }
+  sustenta(g,T,.035,.09,dur,.35); lp.connect(g); g.connect(musica); }
+function orgao(T,m,dur){ const f=mtof(m), fim=T+dur+.2, g=env();
+  [[1,.6],[2,.3],[3,.15],[4,.1]].forEach(([h,v])=>{ const o=osc('sine',f*h,T,fim), gg=ac.createGain(); gg.gain.value=v; o.connect(gg); gg.connect(g); });
+  sustenta(g,T,.06,.01,dur,.08); g.connect(musica); }
+function piano(T,m,dur){ const f=mtof(m), d=Math.min(1.6,dur+.3), g=env(), a=osc('triangle',f,T,T+d+.1), b=osc('sine',f*2,T,T+d+.1), gb=ac.createGain(); gb.gain.value=.3;
+  a.connect(g); b.connect(gb); gb.connect(g); g.gain.setValueAtTime(.11,T); g.gain.exponentialRampToValueAtTime(.001,T+d); g.connect(musica); }
+// o acorde de metais "sampleado" do house francês: dentes de serra desafinadas com um filtro que abre e fecha
+function metal(T,m,dur){ const f=mtof(m), fim=T+dur+.2, g=env(), lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.Q.value=3;
+  lp.frequency.setValueAtTime(5200,T); lp.frequency.exponentialRampToValueAtTime(1100,T+.18);
+  for(const dt of [-12,0,12]){ const o=osc('sawtooth',f,T,fim); o.detune.value=dt; o.connect(lp); }
+  sustenta(g,T,.045,.006,dur*.92,.06); lp.connect(g); g.connect(musica); }
+function pluck(T,m,dur){ const f=mtof(m), d=Math.min(.5,dur+.1), g=env(), lp=ac.createBiquadFilter(), o=osc('square',f,T,T+d+.05); lp.type='lowpass'; lp.Q.value=5;
+  lp.frequency.setValueAtTime(3200,T); lp.frequency.exponentialRampToValueAtTime(500,T+d); g.gain.setValueAtTime(.07,T); g.gain.exponentialRampToValueAtTime(.001,T+d);
+  o.connect(lp); lp.connect(g); g.connect(musica); }
+function baixoLongo(T,m,dur){ const f=mtof(m), fim=T+dur+.15, g=env(), lp=ac.createBiquadFilter(), a=osc('sawtooth',f,T,fim), b=osc('sine',f,T,fim); lp.type='lowpass'; lp.frequency.value=650; lp.Q.value=3;
+  a.connect(lp); b.connect(lp); sustenta(g,T,.075,.008,dur*.95,.06); lp.connect(g); g.connect(musica); }
+const TOCA={bat:(T,m)=>bateria(T,m), pad, orgao, piano, metal, pluck, baixo:baixoLongo};
+// em que multiplicador cada parte da banda do arquivo entra
+const ENTRA={pad:0, orgao:0, piano:0, bat:1, baixo:2, metal:3, pluck:3};
+const NOME_TIPO={pad:'pad', orgao:'órgão', piano:'piano', bat:'bateria', baixo:'baixo', metal:'metais', pluck:'sintetizador'};
+
 // a voz robótica: uma onda rica passando por 3 filtros nas frequências da vogal; a boca abre de "u" para a vogal no começo
 function canta(T,m,v,dur){
   const f=mtof(m), fim=T+dur+.05, src=ac.createGain(), g=env();
@@ -149,10 +202,14 @@ function canta(T,m,v,dur){
 function agenda(s,T){
   const F=FRASES[frase], AC=F.acordes||ACORDES, c=Math.floor(s/16)%F.c.length, st=s%16, A=AC[c%AC.length];
   agendados.push({T,s,c}); if(agendados.length>64) agendados.shift();
+  if(F.acomp && banda==='arquivo'){
+    for(const a of F.acomp[s%(F.c.length*16)]||[]) if(nivel>=ENTRA[a.tipo] && !(MCFG.mudas||[]).includes(a.fi)) TOCA[a.tipo](T+a.off*P, a.m, a.d*P);
+  } else {
   if(st%4===0) bumbo(T);
   if(nivel>=1){ if(st===4||st===12) palma(T); if(st%4===2) chimbal(T); }
   if(nivel>=2 && st%4===2) baixo(T, A.r-12+(st===14?12:0));
   if(RIFF[st]!=null) riff(T, A.r+12+A.t[RIFF[st]] + (nivel>=3 && st%8===7 ? 12 : 0));
+  }
   F.c[c].forEach(([p,m,v,d],i)=>{ if(p!==st) return;
     const n={T,m,v,d:d*P*.92,i,c,feita:false}; vozes.push(n);
     if(modo==='sozinha'){ n.feita=true; canta(T,m,v,n.d); }
@@ -184,6 +241,7 @@ function botoesFrases(){ grupo('#frases',FRASES,0,k=>{ frase=k; if(tocando){ def
 botoesFrases();
 grupo('#timbres',TIMBRES,0,k=>timbre=k);
 grupo('#niveis',Object.fromEntries(NIVEIS.map((_,i)=>[i,{nome:'×'+(i+1)}])),0,k=>{ nivel=+k; aplicaNivel(); });
+grupo('#bandas',{arquivo:{nome:'Do arquivo'},nossa:{nome:'A nossa (gerada)'}},0,k=>banda=k);
 grupo('#modos',{sozinha:{nome:'A voz canta sozinha'},voce:{nome:'Você canta'}},0,k=>modo=k);
 $('#vai').onclick=()=> tocando?para():comeca();
 let flash=null, flashT=0;
@@ -191,8 +249,10 @@ function pinta(){
   document.body.style.setProperty('--fc',COR[nivel]);
   $('#vai').textContent=tocando?'■ Parar':'▶ Tocar';
   const marca=(sel,k)=>document.querySelectorAll(sel+' button').forEach(b=>b.classList.toggle('on',b.dataset.k==String(k)));
-  marca('#frases',frase); marca('#timbres',timbre); marca('#niveis',nivel); marca('#modos',modo);
-  $('#frased').textContent=FRASES[frase].d; $('#timbred').textContent=TIMBRES[timbre].d; $('#niveld').textContent=NIVEIS[nivel];
+  marca('#frases',frase); marca('#bandas',banda);
+  $('#bandad').textContent=banda==='arquivo'?'Os outros instrumentos do arquivo tocam com timbres nossos e entram com o combo: no ×1 pads, cordas, órgão e piano; ×2 bateria; ×3 baixo; ×4 metais e sintetizadores. Desmarque um para calar.':'A nossa batida e o nosso riff, nos acordes estimados do arquivo.';
+  $('#instrs').hidden=banda!=='arquivo'; marca('#timbres',timbre); marca('#niveis',nivel); marca('#modos',modo);
+  $('#frased').textContent=FRASES[frase].d; $('#timbred').textContent=TIMBRES[timbre].d; $('#niveld').textContent=(FRASES[frase].acomp&&banda==='arquivo')?['filtro fechado: pads, cordas, órgão e piano, abafados','+ bateria; o filtro abre um pouco','+ baixo; filtro quase aberto','+ metais e sintetizadores: tudo aberto'][nivel]:NIVEIS[nivel];
   $('#mododd').textContent=modo==='voce'?'A voz só sai quando você aperta uma tecla (ou toca nos quadrados) perto da hora da sílaba. Sem pontos: é só para sentir.':'A voz canta a frase inteira sozinha.';
 }
 function quadro(){
@@ -212,6 +272,8 @@ function quadro(){
 }
 
 // ---------------- MIDI ----------------
+// as 16 famílias de instrumentos do General MIDI (programa / 8)
+const FAMILIA=['piano','percussão afinada','órgão','guitarra','baixo','cordas','conjunto de cordas','metais','palhetas','flautas','sintetizador solo','pad','efeito de sintetizador','instrumento étnico','percussão','efeitos'];
 // lê um arquivo .mid (formatos 0 e 1): as notas de cada faixa, o andamento e o compasso
 function leMidi(buf){
   const d=new DataView(buf); let p=0;
@@ -225,7 +287,7 @@ function leMidi(buf){
   for(let k=0;k<nt && p+8<=d.byteLength;k++){
     const id=txt(4), len=u32(), fim=Math.min(d.byteLength,p+len);
     if(id!=='MTrk'){ p=fim; continue; }
-    let tick=0, st=0, nome=''; const abertas={}, notas=[], canais=new Set();
+    let tick=0, st=0, nome=''; const abertas={}, porCanal={}, prog={};
     while(p<fim){
       tick+=vlq(); let b=u8();
       if(b===0xFF){ const tp=u8(), l=vlq(), ini=p;
@@ -236,11 +298,15 @@ function leMidi(buf){
       if(b===0xF0||b===0xF7){ const l=vlq(); p+=l; continue; }
       if(b<0x80){ p--; b=st; } else st=b;
       const ty=b>>4, ch=b&15, a=u8(), v=(ty===0xC||ty===0xD)?0:u8();
-      if(ty===0x9 && v>0){ (abertas[ch*128+a]??=[]).push(tick); canais.add(ch); }
-      else if(ty===0x8 || (ty===0x9 && v===0)){ const q=abertas[ch*128+a]; if(q&&q.length){ const t0=q.shift(); notas.push({t:t0,d:Math.max(1,tick-t0),m:a}); } }
+      if(ty===0xC && prog[ch]==null) prog[ch]=a;
+      if(ty===0x9 && v>0){ (abertas[ch*128+a]??=[]).push(tick); }
+      else if(ty===0x8 || (ty===0x9 && v===0)){ const q=abertas[ch*128+a]; if(q&&q.length){ const t0=q.shift(); (porCanal[ch]??=[]).push({t:t0,d:Math.max(1,tick-t0),m:a}); } }
     }
     p=fim;
-    if(notas.length) faixas.push({nome:nome||('faixa '+(k+1)), notas:notas.sort((x,y)=>x.t-y.t), bateria:[...canais].every(c=>c===9)});
+    // uma faixa por canal (os arquivos de formato 0 põem a banda inteira numa faixa só, um instrumento por canal)
+    const chs=Object.keys(porCanal).map(Number);
+    for(const ch of chs){ const bat=ch===9, pg=prog[ch]??0;
+      faixas.push({nome:(nome&&chs.length===1?nome:(nome?nome+' · ':'')+(bat?'bateria':FAMILIA[pg>>3])+' (canal '+(ch+1)+')'), notas:porCanal[ch].sort((x,y)=>x.t-y.t), bateria:bat, prog:pg, canal:ch}); }
   }
   if(!faixas.length) throw Error('nenhuma nota no arquivo');
   return {ppq:div, bpm:tempo?Math.round(60e6/tempo):120, compasso:compasso||[4,4], faixas};
@@ -254,6 +320,13 @@ function chutaMelodia(M){
     const v=Math.min(f.notas.length,400)*mono*mono*(med>=57&&med<=86?1:.3);
     if(v>bv){ bv=v; best=i; } });
   return best;
+}
+// que instrumento nosso toca cada faixa do arquivo
+function tipoDe(f){
+  if(f.bateria) return 'bat';
+  const ms=f.notas.map(n=>n.m).sort((a,b)=>a-b), med=ms[ms.length>>1], fam=(f.prog||0)>>3;
+  if(fam===4 || med<45) return 'baixo';
+  return ['piano','piano','orgao','pluck','baixo','pad','pad','metal','metal','pad','pluck','pad','pad','pluck','bat','pad'][fam];
 }
 const NOMES=['Dó','Dó♯','Ré','Mi♭','Mi','Fá','Fá♯','Sol','Lá♭','Lá','Si♭','Si'];
 // converte o trecho escolhido para o formato das frases: [passo, nota, vogal, duração] por compasso, e um acorde por compasso
@@ -279,7 +352,12 @@ function montaMidi(M,cfg){
       ant={r:45+((r-9+12)%12), t:menor?[0,3,7,12]:[0,4,7,12]}; antNome=NOMES[r]+(menor?'m':''); }
     acordes.push(ant); nomes.push(antNome);
   }
-  return {nome:'Sua música', d:`${cfg.arquivo}: ${ns.length} notas em ${nb} compasso${nb>1?'s':''}, a partir do ${cfg.ini+1}. Acordes estimados: ${nomes.join(' · ')}`, c, acordes, bpm:cfg.bpm, notas:ns.length};
+  // a banda: todas as outras faixas do trecho, com a hora exata de cada nota (passo + fração)
+  const acomp=Array.from({length:nb*16},()=>[]);
+  M.faixas.forEach((f,fi)=>{ if(fi===cfg.faixa) return; const tipo=tipoDe(f);
+    for(const n of f.notas){ if(n.t<t0-S/2) continue; if(n.t>=t1-S/2) break; const x=Math.max(0,(n.t-t0)/S), k=Math.floor(x);
+      if(k<nb*16) acomp[k].push({off:x-k, d:n.d/S, m:n.m, tipo, fi}); } });
+  return {acomp, nome:'Sua música', d:`${cfg.arquivo}: ${ns.length} notas em ${nb} compasso${nb>1?'s':''}, a partir do ${cfg.ini+1}. Acordes estimados: ${nomes.join(' · ')}`, c, acordes, bpm:cfg.bpm, notas:ns.length};
 }
 let MID=null, MCFG=null;
 function aplicaMidi(seleciona){
@@ -292,27 +370,41 @@ function aplicaMidi(seleciona){
   try{ localStorage.pulsar_midi=JSON.stringify({M:MID,cfg:MCFG}); }catch(e){}
   pinta();
 }
+function mostraInstrumentos(){
+  $('#instrs').innerHTML=MID.faixas.map((f,i)=>i===MCFG.faixa?'':`<label><input type="checkbox" data-fi="${i}" ${(MCFG.mudas||[]).includes(i)?'':'checked'}> ${f.nome.replace(/[<&]/g,'')} <small>→ ${NOME_TIPO[tipoDe(f)]}, entra no ×${ENTRA[tipoDe(f)]+1} · ${f.notas.length} notas</small></label>`).join('');
+}
+$('#instrs').onchange=e=>{ const fi=+e.target.dataset.fi; MCFG.mudas=(MCFG.mudas||[]).filter(x=>x!==fi); if(!e.target.checked) MCFG.mudas.push(fi); try{ localStorage.pulsar_midi=JSON.stringify({M:MID,cfg:MCFG}); }catch(err){} };
 function mostraMidi(){
-  $('#midi').hidden=false;
+  $('#midi').hidden=false; mostraInstrumentos();
   $('#mFaixa').innerHTML=MID.faixas.map((f,i)=>`<option value="${i}">${f.nome.replace(/[<&]/g,'')} (${f.notas.length} notas${f.bateria?', bateria':''})</option>`).join('');
   $('#mFaixa').value=MCFG.faixa; $('#mIni').value=MCFG.ini+1; $('#mN').value=MCFG.n; $('#mBpm').value=MCFG.bpm; $('#mOit').value=MCFG.oit;
   $('#mArq').textContent=`Arquivo: ${MCFG.arquivo} · ${MID.bpm} bpm no arquivo · fica só neste navegador.`;
 }
 function primeiroCompasso(M,fi){ return Math.floor(M.faixas[fi].notas[0].t/(M.ppq*4)); }
+// onde começar: o primeiro trecho de n compassos em que a melodia já está cheia (70% do trecho mais cheio), não a primeira nota da introdução
+function melhorInicio(M,fi,n){
+  const BT=M.ppq*4, ns=M.faixas[fi].notas, tot=Math.ceil((ns[ns.length-1].t+1)/BT), por=new Array(tot+n).fill(0);
+  for(const x of ns) por[Math.floor(x.t/BT)]++;
+  const jan=b=>por.slice(b,b+n).reduce((a,c)=>a+c,0); let mx=0; for(let b=0;b<tot;b++) mx=Math.max(mx,jan(b));
+  for(let b=0;b<tot;b++) if(jan(b)>=mx*.7 && por[b]>0) return b;
+  return primeiroCompasso(M,fi);
+}
 async function abreMidi(nome,buf){
   try{ MID=leMidi(buf); }catch(err){ $('#mArq').textContent='Não deu para ler: '+err.message; return; }
   const fi=chutaMelodia(MID);
-  const ini=primeiroCompasso(MID,fi), f=MID.faixas[fi], ult=f.notas[f.notas.length-1], resto=Math.ceil((ult.t+ult.d)/(MID.ppq*4))-ini;
-  MCFG={arquivo:nome, faixa:fi, ini, n:[8,4,2,1].find(x=>x<=resto)||1, bpm:MID.bpm, oit:'auto'};
+  const f=MID.faixas[fi], ult=f.notas[f.notas.length-1], resto=Math.ceil((ult.t+ult.d)/(MID.ppq*4))-primeiroCompasso(MID,fi), n=[8,4,2,1].find(x=>x<=resto)||1;
+  MCFG={arquivo:nome, faixa:fi, ini:melhorInicio(MID,fi,n), n, bpm:MID.bpm, oit:'auto'};
   mostraMidi(); aplicaMidi(true);
 }
 $('#arq').onchange=async e=>{ const f=e.target.files[0]; if(f) await abreMidi(f.name, await f.arrayBuffer()); e.target.value=''; };
-$('#mFaixa').onchange=e=>{ MCFG.faixa=+e.target.value; MCFG.ini=primeiroCompasso(MID,MCFG.faixa); $('#mIni').value=MCFG.ini+1; aplicaMidi(); };
+$('#mFaixa').onchange=e=>{ MCFG.faixa=+e.target.value; MCFG.mudas=(MCFG.mudas||[]).filter(x=>x!==MCFG.faixa); mostraInstrumentos(); MCFG.ini=melhorInicio(MID,MCFG.faixa,MCFG.n); $('#mIni').value=MCFG.ini+1; aplicaMidi(); };
 $('#mIni').onchange=e=>{ MCFG.ini=Math.max(0,(+e.target.value||1)-1); aplicaMidi(); };
 $('#mN').onchange=e=>{ MCFG.n=+e.target.value; aplicaMidi(); };
 $('#mBpm').onchange=e=>{ MCFG.bpm=Math.max(50,Math.min(220,+e.target.value||MID.bpm)); aplicaMidi(); };
 $('#mOit').onchange=e=>{ MCFG.oit=e.target.value; aplicaMidi(); };
-try{ const g=JSON.parse(localStorage.pulsar_midi||'null'); if(g&&g.M&&g.cfg){ MID=g.M; MCFG=g.cfg; mostraMidi(); aplicaMidi(false); } }catch(e){}
+const pedido=new URLSearchParams(location.search).get('midi');
+if(pedido) fetch(pedido).then(r=>{ if(!r.ok) throw Error('erro '+r.status); return r.arrayBuffer(); }).then(b=>abreMidi(decodeURIComponent(pedido.split('/').pop()),b)).catch(err=>{ $('#mArq').textContent='Não deu para abrir '+pedido+': '+err.message; });
+else try{ const g=JSON.parse(localStorage.pulsar_midi||'null'); if(g&&g.M&&g.cfg){ MID=g.M; MCFG=g.cfg; mostraMidi(); aplicaMidi(false); } }catch(e){}
 window.__robo={abreMidi, estado:()=>({tocando,nivel,frase,timbre,modo,passo,BPM,corte:filtro&&filtro.frequency.value,vozes:vozes.length,midi:FRASES.midi&&{c:FRASES.midi.c,acordes:FRASES.midi.acordes,d:FRASES.midi.d}})};
 pinta(); quadro();
 </script>
