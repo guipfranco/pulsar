@@ -17,8 +17,13 @@ button{font:inherit;font-weight:700;background:#2a2450;color:var(--tx);border:1p
 button.on{background:color-mix(in srgb,var(--fc) 25%,#2a2450);border-color:var(--fc);box-shadow:0 0 12px color-mix(in srgb,var(--fc) 40%,transparent)}
 button.g{background:#ffc861;color:#241a00;font-size:17px;padding:10px 22px}
 small.d{display:block;color:var(--mut);font-size:12.5px;margin-top:6px;min-height:18px}
-#silabas{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:22px}
-#silabas div{height:74px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font:900 30px/1 system-ui,sans-serif;color:var(--mut);transition:background .08s,transform .08s}
+#silabas{display:grid;grid-template-columns:repeat(var(--n,4),1fr);gap:8px;margin-top:22px}
+label.bt{font-weight:700;background:#2a2450;border-radius:99px;padding:8px 14px;cursor:pointer}
+.campos{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;margin-top:12px}
+.campos label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--mut)}
+.campos select,.campos input{font:inherit;color:var(--tx);background:#1a1536;border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:6px 8px;width:100%}
+.campos .larga{grid-column:1/-1}
+#silabas div{height:74px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font:900 clamp(13px,5vw,30px)/1 system-ui,sans-serif;color:var(--mut);transition:background .08s,transform .08s}
 #silabas div.on{background:var(--fc);color:#140f2c;transform:scale(1.06);box-shadow:0 0 22px var(--fc)}
 #dica{text-align:center;color:var(--mut);font-size:13px;margin-top:10px;min-height:20px}
 </style>
@@ -33,6 +38,20 @@ small.d{display:block;color:var(--mut);font-size:12.5px;margin-top:6px;min-heigh
 <h2>Frase da voz</h2>
 <div class="bts" id="frases"></div><small class="d" id="frased"></small>
 
+<h2>Sua música (MIDI)</h2>
+<div class="bts"><label class="bt" for="arq">Abrir arquivo .mid</label><input type="file" id="arq" accept=".mid,.midi,audio/midi" hidden></div>
+<small class="d" id="mArq">A melodia que você trouxer fica só neste navegador: não vai para lugar nenhum.</small>
+<div id="midi" hidden>
+  <div class="campos">
+    <label class="larga">Faixa da melodia <select id="mFaixa"></select></label>
+    <label>Começa no compasso <input type="number" id="mIni" min="1" step="1"></label>
+    <label>Quantos compassos <select id="mN"><option>1</option><option>2</option><option>4</option><option selected>8</option><option>16</option><option>32</option></select></label>
+    <label>Andamento (bpm) <input type="number" id="mBpm" min="50" max="220" step="1"></label>
+    <label>Oitava <select id="mOit"><option value="auto">automática</option><option value="-12">uma abaixo</option><option value="0">como no arquivo</option><option value="12">uma acima</option></select></label>
+  </div>
+  <small class="d" id="mInfo"></small>
+</div>
+
 <h2>Timbre da voz</h2>
 <div class="bts" id="timbres"></div><small class="d" id="timbred"></small>
 
@@ -42,12 +61,12 @@ small.d{display:block;color:var(--mut);font-size:12.5px;margin-top:6px;min-heigh
 <h2>Quem canta</h2>
 <div class="bts" id="modos"></div><small class="d" id="mododd"></small>
 
-<div id="silabas"><div></div><div></div><div></div><div></div></div>
+<div id="silabas"></div>
 <div id="dica"></div>
 </main>
 <script>
 // ---------------- música ----------------
-const BPM=123, P=60/BPM/4;               // P = um passo (semicolcheia)
+let BPM=123, P=60/BPM/4;                 // P = um passo (semicolcheia); muda com o andamento da frase
 const mtof=m=>440*Math.pow(2,(m-69)/12);
 // 4 compassos: Ré menor, Ré menor, Si bemol, Dó
 const ACORDES=[{r:50,t:[0,3,7,12]},{r:50,t:[0,3,7,12]},{r:46,t:[0,4,7,12]},{r:48,t:[0,4,7,12]}];
@@ -78,7 +97,7 @@ const CORTE=[380,900,2400,14000];
 // riff: qual nota do acorde em cada passo (null = silêncio)
 const RIFF=[0,null,2,1,null,2,null,3,2,null,1,null,0,2,null,1];
 
-let ac=null, master, musica, filtro, bombeio, vozBus, ruido;
+let ac=null, master, musica, filtro, bombeio, vozBus, ruido, eco, agendados=[];
 let tocando=false, prox=0, passo=0, timer=null, nivel=0, frase='escada', timbre='vocoder', modo='sozinha';
 let vozes=[];   // sílabas agendadas: {T, m, v, d, i, feita}
 
@@ -89,7 +108,7 @@ function monta(){
   musica=ac.createGain(); filtro=ac.createBiquadFilter(); filtro.type='lowpass'; filtro.Q.value=7; filtro.frequency.value=CORTE[0];
   bombeio=ac.createGain(); musica.connect(filtro); filtro.connect(bombeio); bombeio.connect(master);
   vozBus=ac.createGain(); vozBus.gain.value=.36; vozBus.connect(master);
-  const eco=ac.createDelay(1), fb=ac.createGain(), lp=ac.createBiquadFilter(), ret=ac.createGain();
+  eco=ac.createDelay(1); const fb=ac.createGain(), lp=ac.createBiquadFilter(), ret=ac.createGain();
   eco.delayTime.value=P*3; fb.gain.value=.3; lp.type='lowpass'; lp.frequency.value=2200; ret.gain.value=.28;
   vozBus.connect(eco); eco.connect(lp); lp.connect(fb); fb.connect(eco); lp.connect(ret); ret.connect(master);
   ruido=ac.createBuffer(1,ac.sampleRate,ac.sampleRate); const d=ruido.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
@@ -128,20 +147,22 @@ function canta(T,m,v,dur){
 }
 
 function agenda(s,T){
-  const c=Math.floor(s/16)%4, st=s%16, A=ACORDES[c];
+  const F=FRASES[frase], AC=F.acordes||ACORDES, c=Math.floor(s/16)%F.c.length, st=s%16, A=AC[c%AC.length];
+  agendados.push({T,s,c}); if(agendados.length>64) agendados.shift();
   if(st%4===0) bumbo(T);
   if(nivel>=1){ if(st===4||st===12) palma(T); if(st%4===2) chimbal(T); }
   if(nivel>=2 && st%4===2) baixo(T, A.r-12+(st===14?12:0));
   if(RIFF[st]!=null) riff(T, A.r+12+A.t[RIFF[st]] + (nivel>=3 && st%8===7 ? 12 : 0));
-  FRASES[frase].c[c].forEach(([p,m,v,d],i)=>{ if(p!==st) return;
-    const n={T,m,v,d:d*P*.92,i,feita:false}; vozes.push(n);
+  F.c[c].forEach(([p,m,v,d],i)=>{ if(p!==st) return;
+    const n={T,m,v,d:d*P*.92,i,c,feita:false}; vozes.push(n);
     if(modo==='sozinha'){ n.feita=true; canta(T,m,v,n.d); }
   });
-  vozes=vozes.filter(n=>n.T>ac.currentTime-1);
+  vozes=vozes.filter(n=>n.T>ac.currentTime-2);
 }
 function relogio(){ while(prox<ac.currentTime+.12){ agenda(passo,prox); prox+=P; passo++; } }
 
-async function comeca(){ if(!ac) monta(); await ac.resume(); tocando=true; passo=0; prox=ac.currentTime+.08; vozes=[]; timer=setInterval(relogio,25); relogio(); aplicaNivel(); pinta(); }
+function defineBpm(){ BPM=FRASES[frase].bpm||123; P=60/BPM/4; if(eco) eco.delayTime.setTargetAtTime(Math.min(.95,P*3),ac.currentTime,.05); }
+async function comeca(){ if(!ac) monta(); await ac.resume(); defineBpm(); tocando=true; passo=0; agendados=[]; prox=ac.currentTime+.08; vozes=[]; timer=setInterval(relogio,25); relogio(); aplicaNivel(); pinta(); }
 function para(){ tocando=false; clearInterval(timer); if(ac) ac.suspend(); pinta(); }
 function aplicaNivel(){ if(ac) filtro.frequency.setTargetAtTime(CORTE[nivel], ac.currentTime, .35); }
 
@@ -159,7 +180,8 @@ const $=s=>document.querySelector(s);
 const COR=['#a9b8ff','#4fe3ff','#5dffa2','#ffd84a'];
 function grupo(sel,itens,atual,clique){ $(sel).innerHTML=Object.entries(itens).map(([k,o])=>`<button data-k="${k}">${o.nome}</button>`).join('');
   $(sel).onclick=e=>{ const b=e.target.closest('button'); if(b){ clique(b.dataset.k); pinta(); } }; }
-grupo('#frases',FRASES,0,k=>frase=k);
+function botoesFrases(){ grupo('#frases',FRASES,0,k=>{ frase=k; if(tocando){ defineBpm(); passo=0; vozes=[]; } }); }
+botoesFrases();
 grupo('#timbres',TIMBRES,0,k=>timbre=k);
 grupo('#niveis',Object.fromEntries(NIVEIS.map((_,i)=>[i,{nome:'×'+(i+1)}])),0,k=>{ nivel=+k; aplicaNivel(); });
 grupo('#modos',{sozinha:{nome:'A voz canta sozinha'},voce:{nome:'Você canta'}},0,k=>modo=k);
@@ -175,18 +197,123 @@ function pinta(){
 }
 function quadro(){
   requestAnimationFrame(quadro);
-  const cs=document.querySelectorAll('#silabas div');
-  if(!ac||!tocando){ cs.forEach(c=>{c.classList.remove('on'); c.textContent='';}); $('#dica').textContent=''; return; }
-  const t=ac.currentTime-(ac.outputLatency||ac.baseLatency||0), s=Math.floor((t-(prox-passo*P))/P), c=((Math.floor(s/16)%4)+4)%4;
-  const F=FRASES[frase].c[c];
-  cs.forEach((el,i)=>{ el.textContent=F[i][2].toUpperCase(); });
+  const box=$('#silabas');
+  if(!ac||!tocando){ if(box.childElementCount){ box.innerHTML=''; box.dataset.k=''; } $('#dica').textContent=''; return; }
+  const t=ac.currentTime-(ac.outputLatency||ac.baseLatency||0);
+  const ag=agendados.filter(a=>a.T<=t).pop(); if(!ag) return;
+  const F=FRASES[frase], c=ag.c, S=F.c[c]||[], n=Math.max(1,Math.min(16,S.length));
+  if(box.dataset.k!==frase+':'+c){ box.dataset.k=frase+':'+c; box.style.setProperty('--n',n);
+    box.innerHTML=(S.length?S:[[0,0,'·']]).slice(0,16).map(x=>`<div>${x[2].toUpperCase()}</div>`).join(''); }
   // acende a sílaba que está soando agora (ou que você acabou de cantar)
-  const soa=vozes.filter(n=>n.T<=t && t<n.T+n.d && (modo==='sozinha'||n.feita));
-  cs.forEach((el,i)=>el.classList.toggle('on',soa.some(n=>n.i===i)));
-  const prox1=vozes.filter(n=>n.T>t).sort((a,b)=>a.T-b.T)[0];
-  $('#dica').textContent=modo==='voce'?(prox1?'próxima: '+prox1.v.toUpperCase()+' em '+Math.max(0,prox1.T-t).toFixed(1)+' s':''):'compasso '+(c+1)+' de 4';
+  const soa=vozes.filter(v=>v.c===c && v.T<=t && t<v.T+v.d && (modo==='sozinha'||v.feita));
+  [...box.children].forEach((el,i)=>el.classList.toggle('on',soa.some(v=>v.i===i)));
+  const p1=vozes.filter(v=>v.T>t).sort((a,b)=>a.T-b.T)[0];
+  $('#dica').textContent=modo==='voce'?(p1?'próxima: '+p1.v.toUpperCase()+' em '+Math.max(0,p1.T-t).toFixed(1)+' s':''):'compasso '+(c+1)+' de '+F.c.length+' · '+BPM+' bpm';
 }
-window.__robo={estado:()=>({tocando,nivel,frase,timbre,modo,passo,corte:filtro&&filtro.frequency.value,vozes:vozes.length})};
+
+// ---------------- MIDI ----------------
+// lê um arquivo .mid (formatos 0 e 1): as notas de cada faixa, o andamento e o compasso
+function leMidi(buf){
+  const d=new DataView(buf); let p=0;
+  const u8=()=>d.getUint8(p++), u16=()=>{ const v=d.getUint16(p); p+=2; return v; }, u32=()=>{ const v=d.getUint32(p); p+=4; return v; };
+  const vlq=()=>{ let v=0,b; do{ b=u8(); v=v*128+(b&127); }while(b&128); return v; };
+  const txt=n=>{ let r=''; for(let i=0;i<n;i++) r+=String.fromCharCode(u8()); return r; };
+  if(txt(4)!=='MThd') throw Error('isso não parece um arquivo MIDI');
+  const hl=u32(); u16(); const nt=u16(), div=u16(); p=8+hl;
+  if(div&0x8000) throw Error('MIDI com tempo SMPTE: não sei ler esse tipo');
+  const faixas=[]; let tempo=null, compasso=null;
+  for(let k=0;k<nt && p+8<=d.byteLength;k++){
+    const id=txt(4), len=u32(), fim=Math.min(d.byteLength,p+len);
+    if(id!=='MTrk'){ p=fim; continue; }
+    let tick=0, st=0, nome=''; const abertas={}, notas=[], canais=new Set();
+    while(p<fim){
+      tick+=vlq(); let b=u8();
+      if(b===0xFF){ const tp=u8(), l=vlq(), ini=p;
+        if(tp===3 && !nome) nome=txt(l).trim();
+        else if(tp===0x51 && tempo==null) tempo=(d.getUint8(ini)<<16)|(d.getUint8(ini+1)<<8)|d.getUint8(ini+2);
+        else if(tp===0x58 && !compasso) compasso=[d.getUint8(ini),2**d.getUint8(ini+1)];
+        p=ini+l; continue; }
+      if(b===0xF0||b===0xF7){ const l=vlq(); p+=l; continue; }
+      if(b<0x80){ p--; b=st; } else st=b;
+      const ty=b>>4, ch=b&15, a=u8(), v=(ty===0xC||ty===0xD)?0:u8();
+      if(ty===0x9 && v>0){ (abertas[ch*128+a]??=[]).push(tick); canais.add(ch); }
+      else if(ty===0x8 || (ty===0x9 && v===0)){ const q=abertas[ch*128+a]; if(q&&q.length){ const t0=q.shift(); notas.push({t:t0,d:Math.max(1,tick-t0),m:a}); } }
+    }
+    p=fim;
+    if(notas.length) faixas.push({nome:nome||('faixa '+(k+1)), notas:notas.sort((x,y)=>x.t-y.t), bateria:[...canais].every(c=>c===9)});
+  }
+  if(!faixas.length) throw Error('nenhuma nota no arquivo');
+  return {ppq:div, bpm:tempo?Math.round(60e6/tempo):120, compasso:compasso||[4,4], faixas};
+}
+// qual faixa tem mais cara de melodia: muitas notas, uma de cada vez, na região da voz
+function chutaMelodia(M){
+  let best=0, bv=-1;
+  M.faixas.forEach((f,i)=>{ if(f.bateria) return;
+    const ms=f.notas.map(n=>n.m).sort((a,b)=>a-b), med=ms[ms.length>>1];
+    const mono=new Set(f.notas.map(n=>n.t)).size/f.notas.length;
+    const v=Math.min(f.notas.length,400)*mono*mono*(med>=57&&med<=86?1:.3);
+    if(v>bv){ bv=v; best=i; } });
+  return best;
+}
+const NOMES=['Dó','Dó♯','Ré','Mi♭','Mi','Fá','Fá♯','Sol','Lá♭','Lá','Si♭','Si'];
+// converte o trecho escolhido para o formato das frases: [passo, nota, vogal, duração] por compasso, e um acorde por compasso
+function montaMidi(M,cfg){
+  const S=M.ppq/4, BT=S*16, F=M.faixas[cfg.faixa], t0=cfg.ini*BT, nb=cfg.n, t1=t0+nb*BT;
+  let ns=F.notas.filter(n=>n.t>=t0-S/2 && n.t<t1-S/2).map(n=>({s:Math.max(0,Math.round((n.t-t0)/S)), d:Math.max(1,Math.round(n.d/S)), m:n.m}));
+  const por=new Map(); for(const n of ns) if(!por.has(n.s)||por.get(n.s).m<n.m) por.set(n.s,n);   // uma nota por vez: a mais aguda
+  ns=[...por.values()].sort((a,b)=>a.s-b.s);
+  ns.forEach((n,i)=>{ const pr=ns[i+1]; n.d=Math.max(1,Math.min(n.d,(pr?pr.s:nb*16)-n.s)); });
+  let sh=0;
+  if(ns.length){ if(cfg.oit==='auto'){ const ms=ns.map(n=>n.m).sort((a,b)=>a-b), med=ms[ms.length>>1]; while(med+sh<62) sh+=12; while(med+sh>76) sh-=12; } else sh=+cfg.oit; }
+  const lo=Math.min(...ns.map(n=>n.m)), hi=Math.max(...ns.map(n=>n.m));
+  const vogal=m=>{ const r=(m-lo)/((hi-lo)||1); return r<.2?'u':r<.4?'ô':r<.65?'a':r<.85?'é':'i'; };
+  const c=Array.from({length:nb},()=>[]);
+  for(const n of ns){ const b=Math.floor(n.s/16); if(b<nb) c[b].push([n.s%16,n.m+sh,vogal(n.m),n.d]); }
+  // acorde de cada compasso: a nota grave que mais soa é a raiz; a terça (menor ou maior) que mais soa decide o tipo
+  const acordes=[], nomes=[]; let ant={r:50,t:[0,3,7,12]}, antNome='?';
+  for(let b=0;b<nb;b++){
+    const a0=t0+b*BT, a1=a0+BT, raiz=new Array(12).fill(0), tudo=new Array(12).fill(0);
+    M.faixas.forEach((f,fi)=>{ if(f.bateria) return; for(const n of f.notas){ if(n.t>=a1) break; const ov=Math.min(a1,n.t+n.d)-Math.max(a0,n.t); if(ov<=0) continue;
+      const pc=n.m%12, w=fi===cfg.faixa?.4:1; tudo[pc]+=ov*w; raiz[pc]+=ov*w*(n.m<55?4:n.m<64?1.5:.3); } });
+    if(raiz.some(x=>x>0)){ const r=raiz.indexOf(Math.max(...raiz)), menor=tudo[(r+3)%12]>tudo[(r+4)%12];
+      ant={r:45+((r-9+12)%12), t:menor?[0,3,7,12]:[0,4,7,12]}; antNome=NOMES[r]+(menor?'m':''); }
+    acordes.push(ant); nomes.push(antNome);
+  }
+  return {nome:'Sua música', d:`${cfg.arquivo}: ${ns.length} notas em ${nb} compasso${nb>1?'s':''}, a partir do ${cfg.ini+1}. Acordes estimados: ${nomes.join(' · ')}`, c, acordes, bpm:cfg.bpm, notas:ns.length};
+}
+let MID=null, MCFG=null;
+function aplicaMidi(seleciona){
+  if(!MID) return;
+  const f=montaMidi(MID,MCFG); FRASES.midi=f; botoesFrases();
+  if(seleciona) frase='midi';
+  if(frase==='midi' && tocando){ defineBpm(); passo=0; vozes=[]; }
+  const fx=MID.faixas[MCFG.faixa], ult=fx.notas[fx.notas.length-1], total=Math.ceil((ult.t+ult.d)/(MID.ppq*4));
+  $('#mInfo').textContent=`${f.notas} notas no trecho · a faixa tem ${total} compassos`+(MID.compasso[0]!==4||MID.compasso[1]!==4?` · atenção: o arquivo está em ${MID.compasso.join('/')}, e aqui todo compasso tem 4 tempos`:'')+(f.notas?'':' · nenhuma nota nesse trecho: mude o compasso de início');
+  try{ localStorage.pulsar_midi=JSON.stringify({M:MID,cfg:MCFG}); }catch(e){}
+  pinta();
+}
+function mostraMidi(){
+  $('#midi').hidden=false;
+  $('#mFaixa').innerHTML=MID.faixas.map((f,i)=>`<option value="${i}">${f.nome.replace(/[<&]/g,'')} (${f.notas.length} notas${f.bateria?', bateria':''})</option>`).join('');
+  $('#mFaixa').value=MCFG.faixa; $('#mIni').value=MCFG.ini+1; $('#mN').value=MCFG.n; $('#mBpm').value=MCFG.bpm; $('#mOit').value=MCFG.oit;
+  $('#mArq').textContent=`Arquivo: ${MCFG.arquivo} · ${MID.bpm} bpm no arquivo · fica só neste navegador.`;
+}
+function primeiroCompasso(M,fi){ return Math.floor(M.faixas[fi].notas[0].t/(M.ppq*4)); }
+async function abreMidi(nome,buf){
+  try{ MID=leMidi(buf); }catch(err){ $('#mArq').textContent='Não deu para ler: '+err.message; return; }
+  const fi=chutaMelodia(MID);
+  const ini=primeiroCompasso(MID,fi), f=MID.faixas[fi], ult=f.notas[f.notas.length-1], resto=Math.ceil((ult.t+ult.d)/(MID.ppq*4))-ini;
+  MCFG={arquivo:nome, faixa:fi, ini, n:[8,4,2,1].find(x=>x<=resto)||1, bpm:MID.bpm, oit:'auto'};
+  mostraMidi(); aplicaMidi(true);
+}
+$('#arq').onchange=async e=>{ const f=e.target.files[0]; if(f) await abreMidi(f.name, await f.arrayBuffer()); e.target.value=''; };
+$('#mFaixa').onchange=e=>{ MCFG.faixa=+e.target.value; MCFG.ini=primeiroCompasso(MID,MCFG.faixa); $('#mIni').value=MCFG.ini+1; aplicaMidi(); };
+$('#mIni').onchange=e=>{ MCFG.ini=Math.max(0,(+e.target.value||1)-1); aplicaMidi(); };
+$('#mN').onchange=e=>{ MCFG.n=+e.target.value; aplicaMidi(); };
+$('#mBpm').onchange=e=>{ MCFG.bpm=Math.max(50,Math.min(220,+e.target.value||MID.bpm)); aplicaMidi(); };
+$('#mOit').onchange=e=>{ MCFG.oit=e.target.value; aplicaMidi(); };
+try{ const g=JSON.parse(localStorage.pulsar_midi||'null'); if(g&&g.M&&g.cfg){ MID=g.M; MCFG=g.cfg; mostraMidi(); aplicaMidi(false); } }catch(e){}
+window.__robo={abreMidi, estado:()=>({tocando,nivel,frase,timbre,modo,passo,BPM,corte:filtro&&filtro.frequency.value,vozes:vozes.length,midi:FRASES.midi&&{c:FRASES.midi.c,acordes:FRASES.midi.acordes,d:FRASES.midi.d}})};
 pinta(); quadro();
 </script>
 </body>
