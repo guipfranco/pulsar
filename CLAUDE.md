@@ -21,6 +21,8 @@ Testado e descartado no um-passo: arpejo em semicolcheias (frenético demais), b
 - `musica/eletronica.js`: o motor que toca as trilhas na hora (`cria`, `sorteio`, `escolhe`). Todo ganho de nota nasce fechado, senão o chimbal estala.
 - `musica/pulsar.js`: a trilha (temas, `montaParte`, `PADRAO`, `iniciarMusica`/`pararMusica`). O jogo fixa o arranjo com `opc.compasso` e acompanha os passos com `opc.aoPasso`.
 
+- `robo.html` (rascunho, 2026-11-20): trilha original no estilo do house francês (batida reta a 123 bpm, riff recortado, filtro que abre com o combo, "bombeio" a cada bumbo) e voz robótica feita com filtros nas formantes das vogais (`FORM`), cantando uma frase de 4 sílabas que se repete. Três frases, dois timbres (talkbox, vocoder), combo ×1 a ×4 e um modo "você canta" sem pontos. Arquivo único, não usa o motor de `musica/`. Inspirado no estilo do Daft Punk; nada de melodia, letra ou sample deles.
+
 Os dois arquivos de música vieram do `um-passo`; se mudarem lá, copie de novo à mão (não há ligação entre os repositórios).
 
 ## Rodar e publicar
