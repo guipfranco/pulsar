@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Acordes (esboços)</title>
+<style>
+:root{--bg:#0b0a18;--tx:#ece8ff;--mut:#9d96c4;--c1:#4fa8ff;--c2:#5dffa2;--c3:#ffd84a}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(80% 60% at 50% 20%,#1d1640,var(--bg));color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh;user-select:none;-webkit-user-select:none}
+main{max-width:620px;margin:0 auto;padding:16px 16px 30px}
+h1{font-size:20px;margin:0}
+p{color:var(--mut);margin:6px 0 0;font-size:14px}
+h2{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);margin:16px 0 8px}
+.bts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button,label.bt{font:inherit;font-weight:700;background:#2a2450;color:var(--tx);border:1px solid transparent;border-radius:99px;padding:8px 14px;cursor:pointer}
+button.on{background:#3b3270;border-color:#a9b8ff;box-shadow:0 0 12px rgba(169,184,255,.35)}
+button.g{background:#ffc861;color:#241a00;font-size:17px;padding:10px 22px}
+small.d{display:block;color:var(--mut);font-size:12.5px;margin-top:6px;min-height:18px}
+#palco{position:relative;margin-top:14px;touch-action:none}
+canvas{display:block;width:100%;height:min(62vh,520px);border-radius:16px;background:#0e0c22}
+#placar{display:flex;justify-content:space-between;color:var(--mut);font-size:13px;margin-top:8px;flex-wrap:wrap;gap:6px}
+#placar b{color:var(--tx)}
+</style>
+</head>
+<body>
+<main>
+<h1>Acordes (esboços)</h1>
+<p>Não importa qual tecla: importa <b>quantas</b>. Cada momento da música chega como 1, 2 ou 3 quadradinhos, e você aperta essa quantidade de teclas quaisquer, juntas, na hora. Cada tecla toca uma voz: a primeira é a melodia, a segunda o baixo, a terceira a voz do meio. No celular, um dedo por quadradinho.</p>
+
+<div class="bts" style="margin-top:14px"><button class="g" id="vai">▶ Tocar</button><label class="bt" for="arq">Abrir .mid</label><input type="file" id="arq" accept=".mid,.midi,audio/midi" hidden></div>
+<small class="d" id="arqd"></small>
+
+<h2>Abordagem</h2>
+<div class="bts" id="variantes"></div><small class="d" id="varianted"></small>
+
+<h2>Densidade</h2>
+<div class="bts" id="densidades"></div><small class="d" id="densidaded"></small>
+
+<h2>Velocidade</h2>
+<div class="bts" id="velocidades"></div>
+
+<div id="palco"><canvas id="cv"></canvas></div>
+<div id="placar"></div>
+</main>
+<script>
+// Esboços de um modo "conte as notas": o jogo ignora QUAL tecla, só conta QUANTAS foram apertadas juntas.
+// Três abordagens para comparar (Pilha, Pistas, Segurar), com filtro de densidade (as notas que não são suas tocam
+// sozinhas) e de velocidade. A música vem de um .mid do Guilherme: fica só no navegador (?midi= abre do servidor local).
+const $=s=>document.querySelector(s);
+const mtof=m=>440*Math.pow(2,(m-69)/12);
+const JAN=.13, VER=1.9;                                  // janela de acerto (s) e quanto tempo antes a nota aparece
+const COR=['','#4fa8ff','#5dffa2','#ffd84a','#ff7ad9','#ff8a4a'];
+let atraso=0; try{ const a=localStorage.pulsar_atraso??localStorage.ptui_ritmo_atraso; if(a!=null) atraso=+a; }catch(e){}
+
+// ---------------- MIDI ----------------
+function leMidi(buf){
+  const d=new DataView(buf); let p=0;
+  const u8=()=>d.getUint8(p++), u16=()=>{ const v=d.getUint16(p); p+=2; return v; }, u32=()=>{ const v=d.getUint32(p); p+=4; return v; };
+  const vlq=()=>{ let v=0,b; do{ b=u8(); v=v*128+(b&127); }while(b&128); return v; };
+  const txt=n=>{ let r=''; for(let i=0;i<n;i++) r+=String.fromCharCode(u8()); return r; };
+  if(txt(4)!=='MThd') throw Error('isso não parece um arquivo MIDI');
+  const hl=u32(); u16(); const nt=u16(), div=u16(); p=8+hl;
+  if(div&0x8000) throw Error('MIDI com tempo SMPTE: não sei ler esse tipo');
+  const notas=[]; let tempo=null;
+  for(let k=0;k<nt && p+8<=d.byteLength;k++){
+    const id=txt(4), len=u32(), fim=Math.min(d.byteLength,p+len); if(id!=='MTrk'){ p=fim; continue; }
+    let tick=0, st=0; const abertas={};
+    while(p<fim){ tick+=vlq(); let b=u8();
+      if(b===0xFF){ const tp=u8(), l=vlq(), ini=p; if(tp===0x51 && tempo==null) tempo=(d.getUint8(ini)<<16)|(d.getUint8(ini+1)<<8)|d.getUint8(ini+2); p=ini+l; continue; }
+      if(b===0xF0||b===0xF7){ p+=vlq(); continue; }
+      if(b<0x80){ p--; b=st; } else st=b;
+      const ty=b>>4, ch=b&15, a=u8(), v=(ty===0xC||ty===0xD)?0:u8();
+      if(ch===9) continue;                                  // a bateria fica de fora: aqui só contam as notas afinadas
+      if(ty===0x9 && v>0) (abertas[ch*128+a]??=[]).push(tick);
+      else if(ty===0x8 || (ty===0x9 && v===0)){ const q=abertas[ch*128+a]; if(q&&q.length){ const t0=q.shift(); notas.push({t:t0,d:Math.max(1,tick-t0),m:a}); } }
+    }
+    p=fim;
+  }
+  if(!notas.length) throw Error('nenhuma nota no arquivo');
+  return {ppq:div, bpm:tempo?Math.round(60e6/tempo):120, notas:notas.sort((a,b)=>a.t-b.t)};
+}
+// junta as notas que começam juntas (até 1/32 de diferença) num grupo: [passo, fração, notas, duração em passos]
+let MUS=null;
+function agrupa(M){
+  const S=M.ppq/4, tol=M.ppq/8, gs=[];
+  for(const n of M.notas){ const g=gs[gs.length-1]; if(g && n.t-g.t<=tol){ if(!g.ms.includes(n.m)){ g.ms.push(n.m); g.d=Math.max(g.d,n.d); } } else gs.push({t:n.t, ms:[n.m], d:n.d}); }
+  const L=Math.ceil((M.notas[M.notas.length-1].t+1)/(S*16))*16;
+  return {bpm:M.bpm, L, grupos:gs.map(g=>{ const x=g.t/S, s=Math.round(x), ms=g.ms.sort((a,b)=>a-b);
+    // ordem das vozes: a de cima (melodia) primeiro, depois o baixo, depois as do meio
+    const ordem=ms.length>1?[ms[ms.length-1],ms[0],...ms.slice(1,-1).reverse()]:ms;
+    // pistas: baixo à esquerda (abaixo do Dó central), as de cima nas outras
+    // (cada nota na sua pista: 3 notas ocupam as 3; 2 notas, o baixo e a de cima, ou as duas de cima)
+    const pistas = ms.length>=3 ? ms.map((m,i)=>i===0?0:i===ms.length-1?2:1)
+                 : ms.length===2 ? (ms[0]<60?[0,2]:[1,2])
+                 : [ms[0]<60?0:2];
+    return {s, off:x-s, n:ms.length, ordem, pistas, d:Math.max(1,g.d/S), ms}; })};
+}
+
+// ---------------- som (um NES de mentira: onda de pulso em cima, triângulo no baixo) ----------------
+let ac=null, master, ruido, PULSO;
+function monta(){
+  ac=new (window.AudioContext||window.webkitAudioContext)();
+  master=ac.createDynamicsCompressor(); master.threshold.value=-14; master.ratio.value=4; const o=ac.createGain(); o.gain.value=.8; master.connect(o); o.connect(ac.destination);
+  const N=40, re=new Float32Array(N), im=new Float32Array(N), D=.25;
+  for(let n=1;n<N;n++){ re[n]=Math.sin(2*Math.PI*n*D)/(Math.PI*n); im[n]=(1-Math.cos(2*Math.PI*n*D))/(Math.PI*n); }
+  PULSO=ac.createPeriodicWave(re,im);
+  ruido=ac.createBuffer(1,ac.sampleRate,ac.sampleRate); const d=ruido.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+}
+function env(){ const g=ac.createGain(); g.gain.value=0; g.gain.setValueAtTime(0,0); return g; }
+function voz(T,m,dur){
+  const o=ac.createOscillator(), g=env(), baixo=m<60, v=baixo?.2:.075;
+  if(baixo) o.type='triangle'; else o.setPeriodicWave(PULSO);
+  o.frequency.value=mtof(m); dur=Math.max(.06,dur);
+  g.gain.setValueAtTime(v,T); g.gain.setValueAtTime(v,T+dur*.85); g.gain.linearRampToValueAtTime(0,T+dur);
+  o.connect(g); g.connect(master); o.start(T); o.stop(T+dur+.05);
+}
+function tique(T,forte){ const s=ac.createBufferSource(), hp=ac.createBiquadFilter(), g=env(); s.buffer=ruido; hp.type='highpass'; hp.frequency.value=forte?5000:8000;
+  g.gain.setValueAtTime(forte?.09:.05,T); g.gain.exponentialRampToValueAtTime(.001,T+.05); s.connect(hp); hp.connect(g); g.connect(master); s.start(T); s.stop(T+.08); }
+function baque(){ const T=ac.currentTime, o=ac.createOscillator(), g=env(); o.type='sine'; o.frequency.setValueAtTime(140,T); o.frequency.exponentialRampToValueAtTime(60,T+.1);
+  g.gain.setValueAtTime(.12,T); g.gain.exponentialRampToValueAtTime(.001,T+.12); o.connect(g); g.connect(master); o.start(T); o.stop(T+.15); }
+
+// ---------------- regras ----------------
+const VARIANTES={
+  pilha:{nome:'Pilha', d:'Uma pista só. Cada momento chega como uma fileira de 1, 2 ou 3 quadradinhos (com cor própria para cada quantidade). Aperte essa quantidade de teclas juntas quando a fileira cruzar a linha.'},
+  pistas:{nome:'Pistas', d:'Três pistas fixas: baixo à esquerda, as duas vozes de cima à direita. Os quadradinhos aparecem na pista da voz que toca, então dá para ver a música (o baixo sozinho, as vozes de cima sem baixo). A tecla continua sendo qualquer uma: só a quantidade conta.'},
+  segurar:{nome:'Segurar', d:'Em vez de apertar a cada nota, você SEGURA a quantidade de teclas (ou dedos) da faixa que está passando, e a música toca sozinha no ritmo enquanto você segura certo. O desafio vira mudar de 3 para 1 e voltar na hora em que a textura muda. Bem mais fácil para músicas rápidas.'},
+};
+const DENSIDADES={
+  todas:{nome:'Todas', d:'Todas as notas são suas.', f:()=>true},
+  tempos:{nome:'Uma por tempo', d:'Só as que caem no tempo (4 por compasso) são suas; as outras tocam sozinhas.', f:g=>g.off<.25 && g.s%4===0},
+  fortes:{nome:'Duas por compasso', d:'Só as do 1º e do 3º tempo são suas; o resto toca sozinho. Um modo fácil.', f:g=>g.off<.25 && g.s%8===0},
+};
+const VELOCIDADES={'.6':{nome:'60%'},'.8':{nome:'80%'},'1':{nome:'100%'}};
+let variante='pilha', densidade='tempos', velocidade='.8';
+
+let tocando=false, T0=0, P=.1, volta=0, fila=[], proxTique=0, segurando=new Set(), retorno=null;
+let est={perf:0, parc:0, perd:0, sobra:0, combo:0, maior:0};
+const ouvido=()=>ac.currentTime-(ac.outputLatency||ac.baseLatency||0);
+
+// gera as ocorrências que vão chegar: cada grupo da música, volta após volta
+function gera(){
+  const ate=ac.currentTime+VER+.4, f=DENSIDADES[densidade].f;
+  while(true){
+    const base=T0+volta*MUS.L*P; let fez=false;
+    for(const g of MUS.grupos){ const T=base+(g.s+g.off)*P; if(T<=ultimoGerado) continue; if(T>ate) return;
+      const meu=f(g), i={T, g, meu, toques:0, julgado:!meu, cor:0}; fila.push(i); ultimoGerado=T; fez=true;
+      if(!meu) for(const m of g.ordem) voz(T,m,g.d*P*.95);           // as notas que não são suas tocam sozinhas, na hora certa
+    }
+    volta++; if(!fez && base>ate) return;
+  }
+}
+let ultimoGerado=-1;
+function tiques(){ const ate=ac.currentTime+.3; while(proxTique<ate){ const k=Math.round((proxTique-T0)/(P*4)); tique(proxTique,k%4===0); proxTique+=P*4; } }
+
+function julga(i,quantos){
+  i.julgado=true; const n=i.g.n;
+  if(quantos===n){ est.perf++; est.combo++; est.maior=Math.max(est.maior,est.combo); i.cor=1; aviso('certo!',1); }
+  else if(quantos===0){ est.perd++; est.combo=0; i.cor=-1; aviso('perdeu',-1); }
+  else if(quantos<n){ est.parc++; est.combo=0; i.cor=0.5; aviso(`faltou ${n-quantos}`,0); }
+  else { est.sobra++; est.combo=0; i.cor=0.5; aviso(`sobrou ${quantos-n}`,0); }
+}
+function aviso(txt,tipo){ retorno={txt,tipo,t:performance.now()}; }
+
+// Pilha e Pistas: cada tecla apertada vai para o grupo mais perto que ainda não está completo
+function aperta(){
+  if(!tocando || variante==='segurar') return;
+  const t=ouvido()-atraso; let m=null, e=JAN;
+  for(const i of fila) if(i.meu && !i.julgado && i.toques<i.g.n && Math.abs(i.T-t)<=e){ e=Math.abs(i.T-t); m=i; }
+  if(!m){ est.sobra++; est.combo=0; aviso('fora da hora',-1); baque(); return; }
+  const k=m.toques++, nota=m.g.ordem[k], resta=Math.max(.06,m.T+m.g.d*P*.95-t);
+  voz(ac.currentTime,nota,resta);
+  if(m.toques===m.g.n) julga(m,m.g.n);
+}
+// Segurar: na hora de cada grupo, conta quantas teclas estão seguradas e toca até essa quantidade de vozes
+function confereSegurar(){
+  const t=ouvido()-atraso;
+  for(const i of fila) if(i.meu && !i.julgado && t>=i.T){ const h=segurando.size; for(const m of i.g.ordem.slice(0,h)) voz(ac.currentTime,m,i.g.d*P*.95); julga(i,h); }
+}
+function relogio(){
+  if(!tocando) return; gera(); tiques();
+  if(variante==='segurar') confereSegurar();
+  const t=ouvido()-atraso;
+  for(const i of fila) if(i.meu && !i.julgado && t>i.T+JAN) julga(i,i.toques);
+  fila=fila.filter(i=>i.T>t-1.5);
+}
+
+async function comeca(){
+  if(!MUS){ $('#arqd').textContent='Abra um arquivo .mid primeiro.'; return; }
+  if(!ac) monta(); await ac.resume();
+  P=60/(MUS.bpm*+velocidade)/4; T0=ac.currentTime+.6; proxTique=T0; volta=0; ultimoGerado=-1; fila=[]; segurando.clear();
+  est={perf:0,parc:0,perd:0,sobra:0,combo:0,maior:0}; tocando=true; $('#vai').textContent='■ Parar';
+  clearInterval(comeca.id); comeca.id=setInterval(relogio,5); relogio();
+}
+function para(){ tocando=false; clearInterval(comeca.id); if(ac) ac.suspend(); $('#vai').textContent='▶ Tocar'; }
+$('#vai').onclick=()=>tocando?para():comeca();
+addEventListener('pagehide',para); document.addEventListener('visibilitychange',()=>{ if(document.hidden && tocando) para(); });
+
+// entrada: qualquer tecla; no celular, cada dedo no palco
+addEventListener('keydown',e=>{ if(e.ctrlKey||e.metaKey||e.altKey||e.key==='Tab'||e.repeat) return; if(e.target.closest('input,select')) return; e.preventDefault(); segurando.add(e.code); aperta(); });
+addEventListener('keyup',e=>{ segurando.delete(e.code); });
+const palco=$('#palco');
+palco.addEventListener('pointerdown',e=>{ e.preventDefault(); palco.setPointerCapture?.(e.pointerId); segurando.add('p'+e.pointerId); aperta(); });
+for(const ev of ['pointerup','pointercancel','lostpointercapture']) palco.addEventListener(ev,e=>segurando.delete('p'+e.pointerId));
+addEventListener('blur',()=>segurando.clear());
+
+// ---------------- desenho: a estrada do Guitar Hero ----------------
+const cv=$('#cv'), g=cv.getContext('2d');
+function tamanho(){ const r=cv.getBoundingClientRect(), dpr=Math.min(2,devicePixelRatio||1); cv.width=r.width*dpr; cv.height=r.height*dpr; g.setTransform(dpr,0,0,dpr,0,0); }
+addEventListener('resize',tamanho); tamanho();
+// profundidade d (0 = na linha, 1 = no horizonte) -> escala e altura na tela
+function proj(d,W,H){ const k=1/(1+2.4*Math.max(0,d)), hy=H*.08, ly=H*.84; return {k, y:hy+(ly-hy)*k}; }
+function quadro(){
+  requestAnimationFrame(quadro);
+  const W=cv.clientWidth, H=cv.clientHeight, cx=W/2, larg=Math.min(W*.86,420);
+  g.clearRect(0,0,W,H);
+  // a estrada
+  const top=proj(1,W,H), bot=proj(0,W,H), ex=proj(-.12,W,H);
+  g.fillStyle='rgba(255,255,255,.04)'; g.beginPath(); g.moveTo(cx-larg/2*top.k,top.y); g.lineTo(cx+larg/2*top.k,top.y); g.lineTo(cx+larg/2*ex.k,ex.y); g.lineTo(cx-larg/2*ex.k,ex.y); g.fill();
+  if(variante==='pistas'){ g.strokeStyle='rgba(255,255,255,.08)'; g.lineWidth=1; for(const f of [-1/6,1/6]){ g.beginPath(); g.moveTo(cx+larg*f*top.k,top.y); g.lineTo(cx+larg*f*ex.k,ex.y); g.stroke(); } }
+  // linhas dos tempos
+  if(ac && tocando){ const t=ouvido()-atraso, b0=Math.ceil((t-T0)/(P*4));
+    for(let b=b0;;b++){ const T=T0+b*P*4, d=(T-t)/VER; if(d>1) break; if(d<-.1) continue; const q=proj(d,W,H);
+      g.strokeStyle=b%4===0?'rgba(255,255,255,.14)':'rgba(255,255,255,.05)'; g.lineWidth=1; g.beginPath(); g.moveTo(cx-larg/2*q.k,q.y); g.lineTo(cx+larg/2*q.k,q.y); g.stroke(); } }
+  // a linha de acerto
+  const fb=retorno&&performance.now()-retorno.t<250?retorno:null;
+  g.strokeStyle=fb?(fb.tipo>0?'#5dffa2':fb.tipo<0?'#ff5a5a':'#ffd84a'):'rgba(255,255,255,.6)'; g.lineWidth=fb?4:2;
+  g.beginPath(); g.moveTo(cx-larg/2,bot.y); g.lineTo(cx+larg/2,bot.y); g.stroke();
+  if(variante==='segurar'){ g.fillStyle='#fff'; g.font='700 14px system-ui'; g.textAlign='center'; g.fillText('segurando: '+segurando.size,cx,H-10); }
+  if(!ac||!tocando){ g.fillStyle='rgba(255,255,255,.5)'; g.font='600 15px system-ui'; g.textAlign='center'; g.fillText(MUS?'toque em ▶ Tocar':'abra um arquivo .mid',cx,H/2); return; }
+  const t=ouvido()-atraso, lado=Math.min(46,larg/8);
+  const vis=fila.filter(i=>{ const d=(i.T-t)/VER; return d<=1.05 && d>=-.15; });
+  if(variante==='segurar'){
+    // faixas contínuas: cada trecho vai do seu grupo até o próximo, com a largura da quantidade
+    const meus=vis.filter(i=>i.meu);
+    for(let j=meus.length-1;j>=0;j--){ const i=meus[j], fimT=Math.min((meus[j+1]?.T)??i.T+i.g.d*P, i.T+i.g.d*P*1.02+P*1.5);
+      const a=proj((i.T-t)/VER,W,H), b=proj(Math.min(1.05,(fimT-t)/VER),W,H), n=i.g.n, w=n*lado*1.15;
+      g.fillStyle=COR[n]; g.globalAlpha=i.julgado?(i.cor>0?.25:.12):.55;
+      g.beginPath(); g.moveTo(cx-w/2*a.k,a.y); g.lineTo(cx+w/2*a.k,a.y); g.lineTo(cx+w/2*b.k,b.y); g.lineTo(cx-w/2*b.k,b.y); g.fill();
+      g.globalAlpha=i.julgado?.3:1; g.fillRect(cx-w/2*a.k,a.y-3*a.k,w*a.k,6*a.k);
+      if(!i.julgado && a.k>.5){ g.fillStyle='#140f2c'; g.font=`900 ${Math.round(16*a.k)}px system-ui`; g.textAlign='center'; g.fillText(n,cx,a.y+5*a.k); } }
+    g.globalAlpha=1;
+  } else {
+    for(let j=vis.length-1;j>=0;j--){ const i=vis[j], q=proj((i.T-t)/VER,W,H), s=lado*q.k, n=i.g.n;
+      if(!i.meu){ g.globalAlpha=.18; } else if(i.julgado){ g.globalAlpha=i.cor>0?.0:.35; } else g.globalAlpha=1;
+      if(g.globalAlpha===0) continue;
+      const xs = variante==='pistas'
+        ? i.g.pistas.map(p=>cx+(p-1)*larg/3*q.k)
+        : Array.from({length:n},(_,k)=>cx+(k-(n-1)/2)*s*1.2);
+      xs.forEach((x,k)=>{ const feito=variante==='pilha'?k<i.toques:false;
+        g.fillStyle=i.meu?(i.cor<0?'#ff5a5a':COR[n]):'#9d96c4';
+        g.fillRect(x-s/2,q.y-s/2,s,s);
+        if(i.meu){ g.strokeStyle='rgba(255,255,255,.7)'; g.lineWidth=Math.max(1,2*q.k); g.strokeRect(x-s/2,q.y-s/2,s,s); }
+        if(feito){ g.fillStyle='rgba(255,255,255,.75)'; g.fillRect(x-s/2,q.y-s/2,s,s); } });
+      if(variante==='pistas' && i.meu && n>1){ g.globalAlpha*=.5; g.strokeStyle=COR[n]; g.lineWidth=2*q.k; g.beginPath(); g.moveTo(Math.min(...xs),q.y); g.lineTo(Math.max(...xs),q.y); g.stroke(); }
+    }
+    g.globalAlpha=1;
+  }
+  if(fb){ g.fillStyle=fb.tipo>0?'#5dffa2':fb.tipo<0?'#ff5a5a':'#ffd84a'; g.font='800 18px system-ui'; g.textAlign='center'; g.fillText(fb.txt,cx,bot.y-lado-8); }
+  const tot=est.perf+est.parc+est.perd;
+  $('#placar').innerHTML=`<span>combo <b>${est.combo}</b> (maior ${est.maior})</span><span><b>${est.perf}</b> certos · ${est.parc} parciais · ${est.perd} perdidos · ${est.sobra} a mais</span><span>${tot?Math.round(est.perf/tot*100):0}%</span>`;
+}
+
+// ---------------- tela ----------------
+function grupo(sel,itens,get,set){ const el=$(sel); el.innerHTML=Object.entries(itens).map(([k,o])=>`<button data-k="${k}">${o.nome}</button>`).join('');
+  el.onclick=e=>{ const b=e.target.closest('button'); if(!b) return; set(b.dataset.k); if(tocando) comeca(); pinta(); }; }
+grupo('#variantes',VARIANTES,()=>variante,k=>variante=k);
+grupo('#densidades',DENSIDADES,()=>densidade,k=>densidade=k);
+grupo('#velocidades',VELOCIDADES,()=>velocidade,k=>velocidade=k);
+function pinta(){
+  const marca=(sel,k)=>document.querySelectorAll(sel+' button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));
+  marca('#variantes',variante); marca('#densidades',densidade); marca('#velocidades',velocidade);
+  $('#varianted').textContent=VARIANTES[variante].d; $('#densidaded').textContent=DENSIDADES[densidade].d;
+}
+function abre(nome,buf){
+  try{ MUS=agrupa(leMidi(buf)); }catch(err){ $('#arqd').textContent='Não deu para ler: '+err.message; return; }
+  const h=[0,0,0,0,0,0]; for(const x of MUS.grupos) h[Math.min(5,x.n)]++;
+  $('#arqd').textContent=`${nome} · ${MUS.bpm} bpm · ${MUS.L/16} compassos · ${MUS.grupos.length} momentos: `+[1,2,3,4,5].filter(k=>h[k]).map(k=>`${h[k]} de ${k}${k===5?'+':''}`).join(', ')+' · fica só neste navegador';
+  if(tocando) comeca();
+}
+$('#arq').onchange=async e=>{ const f=e.target.files[0]; if(f) abre(f.name, await f.arrayBuffer()); e.target.value=''; };
+const pedido=new URLSearchParams(location.search).get('midi');
+if(pedido) fetch(pedido).then(r=>{ if(!r.ok) throw Error('erro '+r.status); return r.arrayBuffer(); }).then(b=>abre(decodeURIComponent(pedido.split('/').pop()),b)).catch(err=>$('#arqd').textContent='Não deu para abrir '+pedido+': '+err.message);
+else $('#arqd').textContent='Abra um arquivo .mid (fica só neste navegador).';
+window.__acordes={estado:()=>({tocando,variante,densidade,velocidade,P,fila:fila.length,est:{...est},segurando:segurando.size}), fila:()=>fila, aperta, seg:segurando};
+pinta(); quadro();
+</script>
+</body>
+</html>
